@@ -45,11 +45,6 @@ func TestSortSessions(t *testing.T) {
 	}
 }
 
-// TruncTitle flattens newlines, honors the 40-byte limit, and strips ESC.
-// Steps:
-// 1. Pass a multiline title, 40-byte, 41-byte, and ESC-bearing strings.
-// 2. Call TruncTitle with limit 40.
-// 3. Expect one line, exact 40 preserved, 41 clipped, and no ESC remaining.
 // Snapshot prints a populated CTX percent and a dash when CTX is empty.
 // Steps:
 // 1. Build a snapshot with one session that has Ctx 21% and one with no Ctx.
@@ -101,6 +96,11 @@ func TestSnapshotRendersCtxOrPlaceholder(t *testing.T) {
 	}
 }
 
+// TruncTitle flattens newlines, honors the 40-byte limit, and strips ESC.
+// Steps:
+// 1. Pass a multiline title, 40-byte, 41-byte, and ESC-bearing strings.
+// 2. Call TruncTitle with limit 40.
+// 3. Expect one line, exact 40 preserved, 41 clipped, and no ESC remaining.
 func TestTruncTitle(t *testing.T) {
 	if g := TruncTitle("  hello\nworld  ", 40); g != "hello world" {
 		t.Fatalf("newline: %q", g)

@@ -57,8 +57,8 @@ func TestIsSelfMonitor(t *testing.T) {
 
 // flagValue keeps --cd paths that contain spaces in both argv forms.
 // Steps:
-// 1. Build NUL-delimited Codex argv using separated and equals-form --cd values.
-// 2. Call flagValue for --cd.
+// 1. Build NUL-delimited Codex argv using separated and equals-form --cd values, plus -C.
+// 2. Call flagValue for --cd and firstFlagValue for --cd/-C.
 // 3. Expect the complete directory including spaces.
 func TestFlagValue(t *testing.T) {
 	sep := "codex\x00exec\x00--cd\x00/work/My Project\x00--json"
@@ -72,6 +72,10 @@ func TestFlagValue(t *testing.T) {
 	plain := "codex exec --cd /home/u/github/agent-usage --json"
 	if g := flagValue(plain, "--cd"); g != "/home/u/github/agent-usage" {
 		t.Fatalf("plain: %q", g)
+	}
+	short := "codex\x00-C\x00/work/My Project\x00exec"
+	if g := firstFlagValue(short, "--cd", "-C"); g != "/work/My Project" {
+		t.Fatalf("short -C: %q", g)
 	}
 }
 

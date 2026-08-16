@@ -451,37 +451,64 @@ INSERT INTO threads VALUES ('t3','/tmp/fallback','ok',129200,0,2000000000,'');
 	}
 }
 
-// leftoverSession marks a Codex exec process busy and titles it exec when SQLite has no title.
+// isCodexExec treats exec as an argv token and skips known value-taking globals.
 // Steps:
-// 1. Build a Codex exec Proc whose cwd has no matching sqlite row.
-// 2. Call leftoverSession.
-// 3. Expect status busy and title exec.
-// isCodexExec treats exec as an argv token, not a substring in paths or prompts.
-// Steps:
-// 1. Feed genuine exec argv plus commands whose path or prompt contains " exec ".
+// 1. Feed genuine exec argv, value-taking globals in separated and equals form, and lookalikes.
 // 2. Call isCodexExec.
-// 3. Expect true only for the exec subcommand.
+// 3. Expect true only when the first positional token is exec (or alias e).
 func TestIsCodexExec(t *testing.T) {
-	if !isCodexExec("codex exec --json") || !isCodexExec("codex\x00exec\x00--cd\x00/tmp") {
-		t.Fatal("genuine exec")
+	yes := []string{
+		"codex exec --json",
+		"codex\x00exec\x00--cd\x00/tmp",
+		"codex --profile work exec",
+		"codex\x00--profile\x00work\x00exec",
+		"codex\x00--profile=work\x00exec",
+		"codex --config model=o3 exec",
+		"codex\x00--config=model=o3\x00exec",
+		"codex -C /tmp exec",
+		"codex --search exec",
+		"codex -- e",
+		"codex e --json",
 	}
-	if isCodexExec("codex") || isCodexExec("codex resume") {
-		t.Fatal("non-exec")
+	for _, cmd := range yes {
+		if !isCodexExec(cmd) {
+			t.Fatalf("want exec: %q", cmd)
+		}
 	}
-	if isCodexExec("codex please exec something") {
-		t.Fatal("prompt words")
+	no := []string{
+		"codex",
+		"codex resume",
+		"codex please exec something",
+		"codex\x00--cd\x00/work/My exec dir\x00resume",
+		"codex --profile work resume",
+		"codex\x00--profile=work\x00resume",
 	}
-	if isCodexExec("codex\x00--cd\x00/work/My exec dir\x00resume") {
-		t.Fatal("spaced path as --cd value")
+	for _, cmd := range no {
+		if isCodexExec(cmd) {
+			t.Fatalf("want non-exec: %q", cmd)
+		}
 	}
 }
 
+// leftoverSession marks a Codex exec process busy and titles it exec when SQLite has no title.
+// Steps:
+// 1. Build Codex exec Procs, including value-taking globals before exec in both argv forms.
+// 2. Call leftoverSession.
+// 3. Expect status busy and title exec.
 func TestLeftoverSessionCodexExecFallback(t *testing.T) {
 	home := t.TempDir()
-	p := Proc{PID: 42, Agent: "codex", CWD: "/tmp/no-thread", Cmd: "codex exec --json"}
-	s := leftoverSession(p, home, nil)
-	if s.Status != "busy" || s.Title != "exec" {
-		t.Fatalf("got status=%q title=%q", s.Status, s.Title)
+	cmds := []string{
+		"codex exec --json",
+		"codex\x00--profile\x00work\x00exec",
+		"codex\x00--profile=work\x00exec",
+		"codex\x00--config\x00model=o3\x00exec",
+	}
+	for _, cmd := range cmds {
+		p := Proc{PID: 42, Agent: "codex", CWD: "/tmp/no-thread", Cmd: cmd, Raw: cmd}
+		s := leftoverSession(p, home, nil)
+		if s.Status != "busy" || s.Title != "exec" {
+			t.Fatalf("cmd %q status=%q title=%q", cmd, s.Status, s.Title)
+		}
 	}
 }
 

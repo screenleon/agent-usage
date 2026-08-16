@@ -92,6 +92,15 @@ func resolveCWD(procCWD, cd string) string {
 	return filepath.Clean(filepath.Join(procCWD, cd))
 }
 
+func firstFlagValue(cmdline string, names ...string) string {
+	for _, name := range names {
+		if v := flagValue(cmdline, name); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func flagValue(cmdline, name string) string {
 	args := argv(cmdline)
 	prefix := name + "="
@@ -143,7 +152,7 @@ func liveAgentProcs() map[int]Proc {
 		if agent == "" {
 			continue
 		}
-		cwd := resolveCWD(readCWD(pid), flagValue(cmd, "--cd"))
+		cwd := resolveCWD(readCWD(pid), firstFlagValue(cmd, "--cd", "-C"))
 		p := Proc{
 			PID:   pid,
 			Agent: agent,

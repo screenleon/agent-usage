@@ -83,20 +83,45 @@ func leftoverSession(p Proc, home string, windows map[string]int64) Session {
 	return s
 }
 
+// Codex global flags that consume the next argv token (clap value options).
+// Boolean flags are omitted so their following token can still be the subcommand.
+var codexValueFlags = map[string]bool{
+	"-c": true, "--config": true,
+	"--enable": true, "--disable": true,
+	"--remote": true, "--remote-auth-token-env": true,
+	"-i": true, "--image": true,
+	"-m": true, "--model": true,
+	"--local-provider": true,
+	"-p":               true, "--profile": true,
+	"-s": true, "--sandbox": true,
+	"-C": true, "--cd": true,
+	"--add-dir": true,
+	"-a":        true, "--ask-for-approval": true,
+}
+
 func isCodexExec(cmd string) bool {
 	args := argv(cmd)
-	skip := map[string]bool{"--cd": true, "-m": true, "--model": true, "-c": true}
 	for i := 1; i < len(args); i++ {
 		a := args[i]
+		if a == "--" {
+			if i+1 < len(args) {
+				return isExecToken(args[i+1])
+			}
+			return false
+		}
 		if strings.HasPrefix(a, "-") {
-			if skip[a] {
+			if !strings.Contains(a, "=") && codexValueFlags[a] {
 				i++
 			}
 			continue
 		}
-		return a == "exec"
+		return isExecToken(a)
 	}
 	return false
+}
+
+func isExecToken(a string) bool {
+	return a == "exec" || a == "e"
 }
 
 func sessionFromProc(p Proc, st string) Session {
