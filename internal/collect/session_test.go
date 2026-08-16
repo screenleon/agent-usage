@@ -61,6 +61,28 @@ func TestClaudeWindow(t *testing.T) {
 	}
 }
 
+func TestParseSQLiteJSONKeepsModelAcrossTitleNewlines(t *testing.T) {
+	raw := []byte(`[
+	  {"tokens_used":56000,"title":"schema_version: 1\nworking_dir: /tmp","cwd":"/home/u/github/agent-usage","model":"gpt-5.6-terra"}
+	]`)
+	rows := parseSQLiteJSON(raw)
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d", len(rows))
+	}
+	if rows[0]["model"] != "gpt-5.6-terra" || rows[0]["tokens_used"] != "56000" {
+		t.Fatalf("got %#v", rows[0])
+	}
+	if tidyTitle(rows[0]["title"]) != "" {
+		t.Fatalf("title %q", tidyTitle(rows[0]["title"]))
+	}
+	if w := codexWindow(rows[0]["model"], map[string]int64{"gpt-5.6-terra": 258400}); w != 258400 {
+		t.Fatalf("window %d", w)
+	}
+	if ctxPct(56000, 258400) != "21%" {
+		t.Fatalf("ctx %s", ctxPct(56000, 258400))
+	}
+}
+
 func TestLoadCodexWindows(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, ".codex")

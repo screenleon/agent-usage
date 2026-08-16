@@ -60,7 +60,7 @@ func Collect(opt Options) Snapshot {
 		}
 		s := sessionFromProc(p, st)
 		if p.Agent == "codex" {
-			enrichCodex(&s, opt.Home, p.CWD, codexWin)
+			enrichCodex(&s, opt.Home, p.CWD, p.Cmd, codexWin)
 			if s.Title == "" && strings.Contains(p.Cmd, " exec ") {
 				s.Title = "exec"
 			}
@@ -414,20 +414,28 @@ func readGrokSummary(dir string) *grokSummary {
 	return &s
 }
 
-func enrichCodex(s *Session, home, cwd string, windows map[string]int64) {
-	row := querySQLite(filepath.Join(home, ".codex", "state_5.sqlite"),
-		`SELECT tokens_used, title, IFNULL(model,'') FROM threads WHERE archived=0 AND cwd=? ORDER BY updated_at DESC LIMIT 1`,
+func enrichCodex(s *Session, home, cwd, cmd string, windows map[string]int64) {
+	rows := querySQLiteMaps(filepath.Join(home, ".codex", "state_5.sqlite"),
+		`SELECT tokens_used, title, IFNULL(model,'') AS model FROM threads WHERE archived=0 AND cwd=? ORDER BY updated_at DESC LIMIT 1`,
 		cwd)
-	if len(row) >= 2 {
-		if t, err := strconv.ParseFloat(row[0], 64); err == nil {
+	model := flagValue(cmd, "-m")
+	if model == "" {
+		model = flagValue(cmd, "--model")
+	}
+	if len(rows) > 0 {
+		row := rows[0]
+		if t, err := strconv.ParseFloat(row["tokens_used"], 64); err == nil {
 			s.Tokens = &t
-			model := ""
-			if len(row) >= 3 {
-				model = row[2]
-			}
-			s.Ctx = ctxPct(t, windows[model])
 		}
-		s.Title = firstLine(row[1])
+		if row["model"] != "" {
+			model = row["model"]
+		}
+		if t := tidyTitle(row["title"]); t != "" {
+			s.Title = t
+		}
+	}
+	if s.Tokens != nil {
+		s.Ctx = ctxPct(*s.Tokens, codexWindow(model, windows))
 	}
 }
 
@@ -439,26 +447,19 @@ func recentCodexIdle(home string, existing []Session, window time.Duration, wind
 		}
 	}
 	cutoff := time.Now().Add(-window).Unix()
-	rows := querySQLiteAll(filepath.Join(home, ".codex", "state_5.sqlite"),
-		`SELECT tokens_used, title, cwd, IFNULL(model,'') FROM threads WHERE archived=0 AND updated_at>=? ORDER BY updated_at DESC LIMIT 8`,
+	rows := querySQLiteMaps(filepath.Join(home, ".codex", "state_5.sqlite"),
+		`SELECT tokens_used, title, cwd, IFNULL(model,'') AS model FROM threads WHERE archived=0 AND updated_at>=? ORDER BY updated_at DESC LIMIT 8`,
 		strconv.FormatInt(cutoff, 10))
 	var out []Session
 	for _, row := range rows {
-		if len(row) < 3 {
+		dir := shortPath(row["cwd"])
+		if dir == "?" || seen[dir] {
 			continue
 		}
-		dir := shortPath(row[2])
-		if seen[dir] {
-			continue
-		}
-		s := Session{Live: false, Status: "idle", Agent: "codex", Dir: dir, Title: firstLine(row[1])}
-		if t, err := strconv.ParseFloat(row[0], 64); err == nil {
+		s := Session{Live: false, Status: "idle", Agent: "codex", Dir: dir, Title: tidyTitle(row["title"])}
+		if t, err := strconv.ParseFloat(row["tokens_used"], 64); err == nil {
 			s.Tokens = &t
-			model := ""
-			if len(row) >= 4 {
-				model = row[3]
-			}
-			s.Ctx = ctxPct(t, windows[model])
+			s.Ctx = ctxPct(t, codexWindow(row["model"], windows))
 		}
 		out = append(out, s)
 		seen[dir] = true
@@ -485,6 +486,26 @@ func firstLine(s string) string {
 		return strings.TrimSpace(s[:i])
 	}
 	return strings.TrimSpace(s)
+}
+
+func tidyTitle(s string) string {
+	s = firstLine(s)
+	if strings.HasPrefix(s, "schema_version:") {
+		return ""
+	}
+	return s
+}
+
+func codexWindow(model string, windows map[string]int64) int64 {
+	if w := windows[model]; w > 0 {
+		return w
+	}
+	// Live exec often names the model; cache miss still needs a window
+	// so CTX is not blank when tokens are known.
+	if strings.HasPrefix(model, "gpt-5") || model == "" {
+		return 272000 * 95 / 100
+	}
+	return 0
 }
 
 func firstNonEmpty(ss ...string) string {
