@@ -22,6 +22,12 @@ func TestReadClaude(t *testing.T) {
 	}
 }
 
+func TestRemaining(t *testing.T) {
+	if Remaining(33) != 67 || Remaining(120) != 0 {
+		t.Fatalf("Remaining(33)=%v Remaining(120)=%v", Remaining(33), Remaining(120))
+	}
+}
+
 func TestDecodeWin(t *testing.T) {
 	u := 33.0
 	w := decodeWin(&rawWin{UsedPercent: &u, WindowSeconds: 604800, ResetAfter: 10})

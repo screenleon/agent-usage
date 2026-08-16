@@ -160,10 +160,7 @@ func fetchGrok(opt Options) Grok {
 	g := Grok{OK: true}
 	if raw.Config.CreditUsagePercent != nil {
 		u := *raw.Config.CreditUsagePercent
-		r := 100 - u
-		if r < 0 {
-			r = 0
-		}
+		r := Remaining(u)
 		g.Used = &u
 		g.Remaining = &r
 	}
@@ -237,14 +234,20 @@ func decodeWin(w *rawWin) *Window {
 	out := &Window{WindowSeconds: w.WindowSeconds, ResetAfter: w.ResetAfter, ResetAt: w.ResetAt}
 	if w.UsedPercent != nil {
 		u := *w.UsedPercent
-		r := 100 - u
-		if r < 0 {
-			r = 0
-		}
+		r := Remaining(u)
 		out.Used = &u
 		out.Remaining = &r
 	}
 	return out
+}
+
+// Remaining is 100-used, floored at 0.
+func Remaining(used float64) float64 {
+	r := 100 - used
+	if r < 0 {
+		return 0
+	}
+	return r
 }
 
 func grokToken(home string) string {

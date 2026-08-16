@@ -64,7 +64,7 @@ func liveAgentProcs() map[int]Proc {
 		}
 		base := filepath.Join("/proc", e.Name())
 		comm := readFileTrim(filepath.Join(base, "comm"))
-		cmd := strings.ReplaceAll(string(readFileBytes(filepath.Join(base, "cmdline"))), "\x00", " ")
+		cmd := cmdlineOf(pid)
 		if strings.Contains(cmd, "agent-usage") {
 			continue
 		}
@@ -116,34 +116,34 @@ func pidAliveAgent(pid int, want string) bool {
 	return classify(commOf(pid), cmdlineOf(pid)) == want
 }
 
-func countChildren(pid int) int {
-	// Linux exposes children as a space-separated pid list.
-	path := filepath.Join("/proc", strconv.Itoa(pid), "task", strconv.Itoa(pid), "children")
-	s := readFileTrim(path)
-	if s == "" {
-		return 0
-	}
-	n := 0
-	for _, f := range strings.Fields(s) {
-		if _, err := strconv.Atoi(f); err == nil {
-			n++
-		}
-	}
-	return n
-}
-
-func childCmdlines(pid int) []string {
+func childPIDs(pid int) []int {
 	path := filepath.Join("/proc", strconv.Itoa(pid), "task", strconv.Itoa(pid), "children")
 	s := readFileTrim(path)
 	if s == "" {
 		return nil
 	}
-	var out []string
+	var out []int
 	for _, f := range strings.Fields(s) {
 		c, err := strconv.Atoi(f)
 		if err != nil {
 			continue
 		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func countChildren(pid int) int {
+	return len(childPIDs(pid))
+}
+
+func childCmdlines(pid int) []string {
+	ids := childPIDs(pid)
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ids))
+	for _, c := range ids {
 		out = append(out, cmdlineOf(c))
 	}
 	return out

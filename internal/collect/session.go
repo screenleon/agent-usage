@@ -161,6 +161,12 @@ func claudeTailTokens(home, sid string) *float64 {
 	return lastUsageTokens(matches[0])
 }
 
+type tokenUsage struct {
+	Input         float64 `json:"input_tokens"`
+	CacheRead     float64 `json:"cache_read_input_tokens"`
+	CacheCreation float64 `json:"cache_creation_input_tokens"`
+}
+
 func lastUsageTokens(path string) *float64 {
 	f, err := os.Open(path)
 	if err != nil {
@@ -188,30 +194,16 @@ func lastUsageTokens(path string) *float64 {
 		}
 		var o struct {
 			Message *struct {
-				Usage *struct {
-					Input         float64 `json:"input_tokens"`
-					CacheRead     float64 `json:"cache_read_input_tokens"`
-					CacheCreation float64 `json:"cache_creation_input_tokens"`
-				} `json:"usage"`
+				Usage *tokenUsage `json:"usage"`
 			} `json:"message"`
-			Usage *struct {
-				Input         float64 `json:"input_tokens"`
-				CacheRead     float64 `json:"cache_read_input_tokens"`
-				CacheCreation float64 `json:"cache_creation_input_tokens"`
-			} `json:"usage"`
+			Usage *tokenUsage `json:"usage"`
 		}
 		if json.Unmarshal([]byte(ln), &o) != nil {
 			continue
 		}
-		var u *struct {
-			Input         float64 `json:"input_tokens"`
-			CacheRead     float64 `json:"cache_read_input_tokens"`
-			CacheCreation float64 `json:"cache_creation_input_tokens"`
-		}
+		u := o.Usage
 		if o.Message != nil && o.Message.Usage != nil {
 			u = o.Message.Usage
-		} else if o.Usage != nil {
-			u = o.Usage
 		}
 		if u == nil {
 			continue
