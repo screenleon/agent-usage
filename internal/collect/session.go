@@ -53,9 +53,16 @@ func Collect(opt Options) Snapshot {
 		if used[pid] {
 			continue
 		}
-		s := sessionFromProc(p, "run")
+		st := "run"
+		if p.Agent == "codex" && strings.Contains(p.Cmd, " exec ") {
+			st = "busy"
+		}
+		s := sessionFromProc(p, st)
 		if p.Agent == "codex" {
 			enrichCodex(&s, opt.Home, p.CWD)
+			if s.Title == "" && strings.Contains(p.Cmd, " exec ") {
+				s.Title = "exec"
+			}
 		}
 		rows = append(rows, s)
 		used[pid] = true

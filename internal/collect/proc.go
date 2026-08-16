@@ -35,6 +35,50 @@ func classify(comm, cmdline string) string {
 			return "claude"
 		}
 	}
+	// comm can be a versioned binary; match the executable basename only.
+	switch firstArgBase(cmdline) {
+	case "codex":
+		return "codex"
+	case "claude":
+		return "claude"
+	case "opencode":
+		return "opencode"
+	}
+	return ""
+}
+
+func firstArgBase(cmdline string) string {
+	exe := strings.TrimSpace(cmdline)
+	if i := strings.IndexAny(exe, " \t"); i >= 0 {
+		exe = exe[:i]
+	}
+	if exe == "" {
+		return ""
+	}
+	return filepath.Base(exe)
+}
+
+// isSelfMonitor reports whether this process is the monitor itself.
+// Only the executable name is checked — never the rest of argv, or a
+// `codex --cd …/agent-usage` session is dropped.
+func isSelfMonitor(comm, cmdline string) bool {
+	if comm == "agent-usage" {
+		return true
+	}
+	return firstArgBase(cmdline) == "agent-usage"
+}
+
+func flagValue(cmdline, name string) string {
+	fields := strings.Fields(cmdline)
+	for i := 0; i < len(fields)-1; i++ {
+		if fields[i] == name {
+			return fields[i+1]
+		}
+		prefix := name + "="
+		if strings.HasPrefix(fields[i], prefix) {
+			return fields[i][len(prefix):]
+		}
+	}
 	return ""
 }
 
@@ -65,17 +109,21 @@ func liveAgentProcs() map[int]Proc {
 		base := filepath.Join("/proc", e.Name())
 		comm := readFileTrim(filepath.Join(base, "comm"))
 		cmd := cmdlineOf(pid)
-		if strings.Contains(cmd, "agent-usage") {
+		if isSelfMonitor(comm, cmd) {
 			continue
 		}
 		agent := classify(comm, cmd)
 		if agent == "" {
 			continue
 		}
+		cwd := readCWD(pid)
+		if cd := flagValue(cmd, "--cd"); cd != "" {
+			cwd = cd
+		}
 		p := Proc{
 			PID:   pid,
 			Agent: agent,
-			CWD:   readCWD(pid),
+			CWD:   cwd,
 			Cmd:   strings.TrimSpace(cmd),
 			Kids:  countChildren(pid),
 		}
