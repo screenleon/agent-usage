@@ -1,0 +1,4 @@
+/bin/
+/agent-usage
+*.test
+*.out
