@@ -38,7 +38,9 @@ func querySQLiteMaps(db, sql string, args ...string) []map[string]string {
 }
 
 func flattenSQLNewlines(sql string) string {
-	return strings.ReplaceAll(sql, "title", "replace(replace(title, char(10), ' '), char(13), ' ')")
+	// Keep the result column named title so maps stay keyed the same as -json.
+	return strings.ReplaceAll(sql, ", title,",
+		", replace(replace(title, char(10), ' '), char(13), ' ') AS title,")
 }
 
 func parseSQLiteUSV(out []byte) []map[string]string {

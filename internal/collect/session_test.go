@@ -208,6 +208,49 @@ func TestEscapeSQL(t *testing.T) {
 	}
 }
 
+// flattenSQLNewlines aliases the rewritten title expression back to title.
+// Steps:
+// 1. Take a SELECT that lists title among other columns.
+// 2. Call flattenSQLNewlines.
+// 3. Expect the title expression to end with AS title.
+func TestFlattenSQLNewlinesKeepsTitleAlias(t *testing.T) {
+	q := `SELECT tokens_used, title, cwd, IFNULL(model,'') AS model FROM threads`
+	got := flattenSQLNewlines(q)
+	if !strings.Contains(got, "AS title") || !strings.Contains(got, "tokens_used") {
+		t.Fatalf("got %q", got)
+	}
+	if strings.Count(got, ", title,") != 0 {
+		t.Fatalf("bare title column remains: %q", got)
+	}
+}
+
+// querySQLiteMaps uses the USV fallback when sqlite3 rejects -json.
+// Steps:
+// 1. Put a stub sqlite3 on PATH that fails -json and prints a USV table.
+// 2. Call querySQLiteMaps against a dummy db path.
+// 3. Expect tokens_used, title, and model from the fallback row.
+func TestQuerySQLiteMapsFallsBackWhenJSONUnsupported(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "state_5.sqlite")
+	if err := os.WriteFile(db, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stub := filepath.Join(dir, "sqlite3")
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = \"-json\" ]; then echo 'unknown option: -json' >&2; exit 1; fi\n" +
+		"done\n" +
+		"printf 'tokens_used\\037title\\037model\\n56000\\037hello world\\037gpt-5.6-terra\\n'\n"
+	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	rows := querySQLiteMaps(db, `SELECT tokens_used, title, IFNULL(model,'') AS model FROM threads`, "/tmp/x")
+	if len(rows) != 1 || rows[0]["title"] != "hello world" || rows[0]["model"] != "gpt-5.6-terra" || rows[0]["tokens_used"] != "56000" {
+		t.Fatalf("got %#v", rows)
+	}
+}
+
 func writeCodexFixture(t *testing.T, home, sql string) {
 	t.Helper()
 	if _, err := exec.LookPath("sqlite3"); err != nil {
