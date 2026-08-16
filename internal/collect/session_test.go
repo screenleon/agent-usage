@@ -153,20 +153,130 @@ func TestCodexWindow(t *testing.T) {
 	}
 }
 
+// loadCodexWindows maps only valid slugs; percent applies for 1–99.
+// Steps:
+// 1. Write each models_cache.json fixture (or omit the file).
+// 2. Call loadCodexWindows.
+// 3. Expect max-window fallback, percent only for 1–99, and omitted invalid entries.
 func TestLoadCodexWindows(t *testing.T) {
-	home := t.TempDir()
-	dir := filepath.Join(home, ".codex")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
+	writeCache := func(t *testing.T, home, body string) {
+		t.Helper()
+		dir := filepath.Join(home, ".codex")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "models_cache.json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	body := `{"models":[{"slug":"gpt-5.6-terra","context_window":272000,"max_context_window":272000,"effective_context_window_percent":95}]}`
-	if err := os.WriteFile(filepath.Join(dir, "models_cache.json"), []byte(body), 0o600); err != nil {
-		t.Fatal(err)
+	wantOnly := func(slug string, window int64) map[string]int64 {
+		return map[string]int64{slug: window}
 	}
-	w := loadCodexWindows(home)
-	if w["gpt-5.6-terra"] != 272000*95/100 {
-		t.Fatalf("got %v", w)
+
+	t.Run("nominal95", func(t *testing.T) {
+		home := t.TempDir()
+		writeCache(t, home, `{"models":[{"slug":"gpt-5.6-terra","context_window":272000,"max_context_window":272000,"effective_context_window_percent":95}]}`)
+		got := loadCodexWindows(home)
+		want := wantOnly("gpt-5.6-terra", 272000*95/100)
+		if !mapsEqual(got, want) {
+			t.Fatalf("got %v want %v", got, want)
+		}
+	})
+	t.Run("zeroWindowFallsBackToMax", func(t *testing.T) {
+		home := t.TempDir()
+		writeCache(t, home, `{"models":[{"slug":"gpt-5.6-terra","context_window":0,"max_context_window":272000,"effective_context_window_percent":95}]}`)
+		got := loadCodexWindows(home)
+		want := wantOnly("gpt-5.6-terra", 272000*95/100)
+		if !mapsEqual(got, want) {
+			t.Fatalf("got %v want %v", got, want)
+		}
+	})
+	t.Run("negativeWindowFallsBackToMax", func(t *testing.T) {
+		home := t.TempDir()
+		writeCache(t, home, `{"models":[{"slug":"gpt-5.6-terra","context_window":-1,"max_context_window":200000,"effective_context_window_percent":50}]}`)
+		got := loadCodexWindows(home)
+		want := wantOnly("gpt-5.6-terra", 200000*50/100)
+		if !mapsEqual(got, want) {
+			t.Fatalf("got %v want %v", got, want)
+		}
+	})
+	t.Run("effective0KeepsWindow", func(t *testing.T) {
+		home := t.TempDir()
+		writeCache(t, home, `{"models":[{"slug":"gpt-5.6-terra","context_window":100000,"max_context_window":272000,"effective_context_window_percent":0}]}`)
+		got := loadCodexWindows(home)
+		want := wantOnly("gpt-5.6-terra", 100000)
+		if !mapsEqual(got, want) {
+			t.Fatalf("got %v want %v", got, want)
+		}
+	})
+	t.Run("effective100KeepsWindow", func(t *testing.T) {
+		home := t.TempDir()
+		writeCache(t, home, `{"models":[{"slug":"gpt-5.6-terra","context_window":100000,"max_context_window":272000,"effective_context_window_percent":100}]}`)
+		got := loadCodexWindows(home)
+		want := wantOnly("gpt-5.6-terra", 100000)
+		if !mapsEqual(got, want) {
+			t.Fatalf("got %v want %v", got, want)
+		}
+	})
+	t.Run("effective1Applies", func(t *testing.T) {
+		home := t.TempDir()
+		writeCache(t, home, `{"models":[{"slug":"gpt-5.6-terra","context_window":100000,"effective_context_window_percent":1}]}`)
+		got := loadCodexWindows(home)
+		want := wantOnly("gpt-5.6-terra", 1000)
+		if !mapsEqual(got, want) {
+			t.Fatalf("got %v want %v", got, want)
+		}
+	})
+	t.Run("effective99Applies", func(t *testing.T) {
+		home := t.TempDir()
+		writeCache(t, home, `{"models":[{"slug":"gpt-5.6-terra","context_window":100000,"effective_context_window_percent":99}]}`)
+		got := loadCodexWindows(home)
+		want := wantOnly("gpt-5.6-terra", 99000)
+		if !mapsEqual(got, want) {
+			t.Fatalf("got %v want %v", got, want)
+		}
+	})
+	t.Run("zeroWindowAndMaxOmitted", func(t *testing.T) {
+		home := t.TempDir()
+		writeCache(t, home, `{"models":[{"slug":"bad-win","context_window":0,"max_context_window":0,"effective_context_window_percent":95}]}`)
+		got := loadCodexWindows(home)
+		if len(got) != 0 {
+			t.Fatalf("got %v", got)
+		}
+	})
+	t.Run("emptySlugOmitted", func(t *testing.T) {
+		home := t.TempDir()
+		writeCache(t, home, `{"models":[{"slug":"","context_window":272000,"effective_context_window_percent":95},{"slug":"ok","context_window":200000}]}`)
+		got := loadCodexWindows(home)
+		want := wantOnly("ok", 200000)
+		if !mapsEqual(got, want) {
+			t.Fatalf("got %v want %v", got, want)
+		}
+	})
+	t.Run("malformedJSON", func(t *testing.T) {
+		home := t.TempDir()
+		writeCache(t, home, `{"models":[`)
+		if got := loadCodexWindows(home); got != nil {
+			t.Fatalf("got %v", got)
+		}
+	})
+	t.Run("missingFile", func(t *testing.T) {
+		if got := loadCodexWindows(t.TempDir()); got != nil {
+			t.Fatalf("got %v", got)
+		}
+	})
+}
+
+func mapsEqual(a, b map[string]int64) bool {
+	if len(a) != len(b) {
+		return false
 	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // lastUsageTokens sums the last assistant usage buckets from a jsonl tail.
