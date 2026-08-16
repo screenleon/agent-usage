@@ -49,6 +49,34 @@ func TestFlagValue(t *testing.T) {
 	}
 }
 
+func TestChildPIDs(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []int
+	}{
+		{"", nil},
+		{"   \n", nil},
+		{"12 34 56", []int{12, 34, 56}},
+		{"12 x 34", []int{12, 34}},
+		{"not-a-pid", nil},
+		{"  7\t8\n9 ", []int{7, 8, 9}},
+	}
+	for _, c := range cases {
+		got := parseChildPIDs(c.in)
+		if len(got) != len(c.want) {
+			t.Fatalf("parseChildPIDs(%q)=%v want %v", c.in, got, c.want)
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Fatalf("parseChildPIDs(%q)=%v want %v", c.in, got, c.want)
+			}
+		}
+		if n := len(parseChildPIDs(c.in)); n != len(c.want) {
+			t.Fatalf("count %d want %d", n, len(c.want))
+		}
+	}
+}
+
 func TestFormatElapsed(t *testing.T) {
 	if g := formatElapsed(65); g != "01:05" {
 		t.Fatalf("got %s", g)

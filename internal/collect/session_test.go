@@ -12,6 +12,71 @@ func TestShortPathBasename(t *testing.T) {
 	}
 }
 
+func TestClaudeTailTokens(t *testing.T) {
+	home := t.TempDir()
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	sid := "sess-config"
+	// decoy in $HOME/.claude — must not be used
+	decoy := filepath.Join(home, ".claude", "projects", "decoy")
+	if err := os.MkdirAll(decoy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(decoy, sid+".jsonl"), []byte(
+		`{"message":{"usage":{"input_tokens":9,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	realDir := filepath.Join(cfg, "projects", "real")
+	if err := os.MkdirAll(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, sid+".jsonl"), []byte(
+		`{"message":{"model":"claude-opus-5","usage":{"input_tokens":2,"cache_read_input_tokens":100,"cache_creation_input_tokens":8}}}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := claudeTailTokens(home, sid)
+	if got == nil || *got != 110 {
+		t.Fatalf("configured tree tokens %#v", got)
+	}
+	tok, model, ok := claudeTail(home, sid)
+	if !ok || tok != 110 || model != "claude-opus-5" {
+		t.Fatalf("claudeTail=%v %q %v", tok, model, ok)
+	}
+	if claudeTailTokens(home, "missing-id") != nil {
+		t.Fatal("missing sid should be nil")
+	}
+}
+
+func TestClaudeWindow(t *testing.T) {
+	if claudeWindow("claude-opus-5") != 200_000 {
+		t.Fatal("default window")
+	}
+	if claudeWindow("claude-sonnet-4-5-1m") != 1_000_000 {
+		t.Fatal("1m window")
+	}
+	if ctxPct(100_000, 200_000) != "50%" {
+		t.Fatalf("ctxPct=%s", ctxPct(100_000, 200_000))
+	}
+}
+
+func TestLoadCodexWindows(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"models":[{"slug":"gpt-5.6-terra","context_window":272000,"max_context_window":272000,"effective_context_window_percent":95}]}`
+	if err := os.WriteFile(filepath.Join(dir, "models_cache.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w := loadCodexWindows(home)
+	if w["gpt-5.6-terra"] != 272000*95/100 {
+		t.Fatalf("got %v", w)
+	}
+}
+
 func TestLastUsageTokens(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "s.jsonl")

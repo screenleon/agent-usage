@@ -166,8 +166,11 @@ func pidAliveAgent(pid int, want string) bool {
 
 func childPIDs(pid int) []int {
 	path := filepath.Join("/proc", strconv.Itoa(pid), "task", strconv.Itoa(pid), "children")
-	s := readFileTrim(path)
-	if s == "" {
+	return parseChildPIDs(readFileTrim(path))
+}
+
+func parseChildPIDs(s string) []int {
+	if strings.TrimSpace(s) == "" {
 		return nil
 	}
 	var out []int

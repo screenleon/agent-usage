@@ -44,6 +44,7 @@ func Collect(opt Options) Snapshot {
 		opt.RecentFor = 2 * time.Hour
 	}
 	procs := liveAgentProcs()
+	codexWin := loadCodexWindows(opt.Home)
 	var rows []Session
 
 	used := map[int]bool{}
@@ -59,7 +60,7 @@ func Collect(opt Options) Snapshot {
 		}
 		s := sessionFromProc(p, st)
 		if p.Agent == "codex" {
-			enrichCodex(&s, opt.Home, p.CWD)
+			enrichCodex(&s, opt.Home, p.CWD, codexWin)
 			if s.Title == "" && strings.Contains(p.Cmd, " exec ") {
 				s.Title = "exec"
 			}
@@ -68,7 +69,7 @@ func Collect(opt Options) Snapshot {
 		used[pid] = true
 	}
 	if opt.Recent {
-		rows = append(rows, recentCodexIdle(opt.Home, rows, opt.RecentFor)...)
+		rows = append(rows, recentCodexIdle(opt.Home, rows, opt.RecentFor, codexWin)...)
 	}
 	return Snapshot{Taken: time.Now(), Sessions: rows}
 }
@@ -134,7 +135,10 @@ func claudeSessions(home string, procs map[int]Proc, used map[int]bool) []Sessio
 			s.Dir = shortPath(meta.CWD)
 		}
 		s.Title = meta.Name
-		s.Tokens = claudeTailTokens(home, meta.SessionID)
+		if tok, model, ok := claudeTail(home, meta.SessionID); ok {
+			s.Tokens = &tok
+			s.Ctx = ctxPct(tok, claudeWindow(model))
+		}
 		out = append(out, s)
 		used[pid] = true
 	}
@@ -157,15 +161,23 @@ func claudeHome(home string) string {
 }
 
 func claudeTailTokens(home, sid string) *float64 {
-	if sid == "" {
+	tok, _, ok := claudeTail(home, sid)
+	if !ok {
 		return nil
+	}
+	return &tok
+}
+
+func claudeTail(home, sid string) (tokens float64, model string, ok bool) {
+	if sid == "" {
+		return 0, "", false
 	}
 	root := filepath.Join(claudeHome(home), "projects")
 	matches, _ := filepath.Glob(filepath.Join(root, "*", sid+".jsonl"))
 	if len(matches) == 0 {
-		return nil
+		return 0, "", false
 	}
-	return lastUsageTokens(matches[0])
+	return lastUsage(matches[0])
 }
 
 type tokenUsage struct {
@@ -175,14 +187,22 @@ type tokenUsage struct {
 }
 
 func lastUsageTokens(path string) *float64 {
+	tok, _, ok := lastUsage(path)
+	if !ok {
+		return nil
+	}
+	return &tok
+}
+
+func lastUsage(path string) (tokens float64, model string, ok bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return 0, "", false
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
-		return nil
+		return 0, "", false
 	}
 	const tail = 8192
 	start := st.Size() - tail
@@ -191,7 +211,7 @@ func lastUsageTokens(path string) *float64 {
 	}
 	buf := make([]byte, st.Size()-start)
 	if _, err := f.ReadAt(buf, start); err != nil && len(buf) == 0 {
-		return nil
+		return 0, "", false
 	}
 	lines := strings.Split(string(buf), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -200,7 +220,9 @@ func lastUsageTokens(path string) *float64 {
 			continue
 		}
 		var o struct {
+			Model   string `json:"model"`
 			Message *struct {
+				Model string      `json:"model"`
 				Usage *tokenUsage `json:"usage"`
 			} `json:"message"`
 			Usage *tokenUsage `json:"usage"`
@@ -209,16 +231,72 @@ func lastUsageTokens(path string) *float64 {
 			continue
 		}
 		u := o.Usage
-		if o.Message != nil && o.Message.Usage != nil {
-			u = o.Message.Usage
+		model = o.Model
+		if o.Message != nil {
+			if o.Message.Usage != nil {
+				u = o.Message.Usage
+			}
+			if o.Message.Model != "" {
+				model = o.Message.Model
+			}
 		}
 		if u == nil {
 			continue
 		}
-		sum := u.Input + u.CacheRead + u.CacheCreation
-		return &sum
+		return u.Input + u.CacheRead + u.CacheCreation, model, true
 	}
-	return nil
+	return 0, "", false
+}
+
+func claudeWindow(model string) int64 {
+	m := strings.ToLower(model)
+	if strings.Contains(m, "1m") {
+		return 1_000_000
+	}
+	return 200_000
+}
+
+func ctxPct(used float64, window int64) string {
+	if window <= 0 || used < 0 {
+		return ""
+	}
+	pct := int(used * 100 / float64(window))
+	if pct > 999 {
+		pct = 999
+	}
+	return strconv.Itoa(pct) + "%"
+}
+
+func loadCodexWindows(home string) map[string]int64 {
+	b, err := os.ReadFile(filepath.Join(home, ".codex", "models_cache.json"))
+	if err != nil {
+		return nil
+	}
+	var raw struct {
+		Models []struct {
+			Slug   string `json:"slug"`
+			Window int64  `json:"context_window"`
+			MaxWin int64  `json:"max_context_window"`
+			EffPct int64  `json:"effective_context_window_percent"`
+		} `json:"models"`
+	}
+	if json.Unmarshal(b, &raw) != nil {
+		return nil
+	}
+	out := make(map[string]int64, len(raw.Models))
+	for _, m := range raw.Models {
+		w := m.Window
+		if w <= 0 {
+			w = m.MaxWin
+		}
+		if m.EffPct > 0 && m.EffPct < 100 && w > 0 {
+			w = w * m.EffPct / 100
+		}
+		if m.Slug != "" && w > 0 {
+			out[m.Slug] = w
+		}
+	}
+	return out
 }
 
 func grokSessions(home string, procs map[int]Proc, used map[int]bool, recent bool) []Session {
@@ -336,19 +414,24 @@ func readGrokSummary(dir string) *grokSummary {
 	return &s
 }
 
-func enrichCodex(s *Session, home, cwd string) {
+func enrichCodex(s *Session, home, cwd string, windows map[string]int64) {
 	row := querySQLite(filepath.Join(home, ".codex", "state_5.sqlite"),
-		`SELECT tokens_used, title FROM threads WHERE archived=0 AND cwd=? ORDER BY updated_at DESC LIMIT 1`,
+		`SELECT tokens_used, title, IFNULL(model,'') FROM threads WHERE archived=0 AND cwd=? ORDER BY updated_at DESC LIMIT 1`,
 		cwd)
 	if len(row) >= 2 {
 		if t, err := strconv.ParseFloat(row[0], 64); err == nil {
 			s.Tokens = &t
+			model := ""
+			if len(row) >= 3 {
+				model = row[2]
+			}
+			s.Ctx = ctxPct(t, windows[model])
 		}
 		s.Title = firstLine(row[1])
 	}
 }
 
-func recentCodexIdle(home string, existing []Session, window time.Duration) []Session {
+func recentCodexIdle(home string, existing []Session, window time.Duration, windows map[string]int64) []Session {
 	seen := map[string]bool{}
 	for _, r := range existing {
 		if r.Agent == "codex" && r.Live {
@@ -357,7 +440,7 @@ func recentCodexIdle(home string, existing []Session, window time.Duration) []Se
 	}
 	cutoff := time.Now().Add(-window).Unix()
 	rows := querySQLiteAll(filepath.Join(home, ".codex", "state_5.sqlite"),
-		`SELECT tokens_used, title, cwd FROM threads WHERE archived=0 AND updated_at>=? ORDER BY updated_at DESC LIMIT 8`,
+		`SELECT tokens_used, title, cwd, IFNULL(model,'') FROM threads WHERE archived=0 AND updated_at>=? ORDER BY updated_at DESC LIMIT 8`,
 		strconv.FormatInt(cutoff, 10))
 	var out []Session
 	for _, row := range rows {
@@ -371,6 +454,11 @@ func recentCodexIdle(home string, existing []Session, window time.Duration) []Se
 		s := Session{Live: false, Status: "idle", Agent: "codex", Dir: dir, Title: firstLine(row[1])}
 		if t, err := strconv.ParseFloat(row[0], 64); err == nil {
 			s.Tokens = &t
+			model := ""
+			if len(row) >= 4 {
+				model = row[3]
+			}
+			s.Ctx = ctxPct(t, windows[model])
 		}
 		out = append(out, s)
 		seen[dir] = true
