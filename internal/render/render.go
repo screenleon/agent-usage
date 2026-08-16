@@ -43,7 +43,7 @@ func Snapshot(w io.Writer, snap collect.Snapshot, q *quota.Report, interval time
 			if s.Tokens != nil {
 				tok = fmtTok(*s.Tokens)
 			}
-			loc := s.Dir
+			loc := collect.SanitizeDisplay(s.Dir)
 			if s.Title != "" && s.Title != s.Dir {
 				loc = loc + " · " + TruncTitle(s.Title, 40)
 			}
@@ -227,7 +227,9 @@ func sortSessions(in []collect.Session) []collect.Session {
 }
 
 func TruncTitle(s string, n int) string {
-	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = collect.SanitizeDisplay(s)
+	s = strings.TrimSpace(s)
 	if len(s) > n {
 		return s[:n]
 	}

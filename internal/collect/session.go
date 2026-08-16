@@ -134,7 +134,7 @@ func claudeSessions(home string, procs map[int]Proc, used map[int]bool) []Sessio
 		if meta.CWD != "" {
 			s.Dir = shortPath(meta.CWD)
 		}
-		s.Title = meta.Name
+		s.Title = SanitizeDisplay(meta.Name)
 		if tok, model, ok := claudeTail(home, meta.SessionID); ok {
 			s.Tokens = &tok
 			s.Ctx = ctxPct(tok, claudeWindow(model))
@@ -476,9 +476,9 @@ func shortPath(p string) string {
 		p = "~" + p[len(home):]
 	}
 	if i := strings.LastIndex(p, "/"); i >= 0 && i+1 < len(p) {
-		return p[i+1:]
+		p = p[i+1:]
 	}
-	return p
+	return SanitizeDisplay(p)
 }
 
 func firstLine(s string) string {
@@ -493,7 +493,7 @@ func tidyTitle(s string) string {
 	if strings.HasPrefix(s, "schema_version:") {
 		return ""
 	}
-	return s
+	return SanitizeDisplay(s)
 }
 
 func codexWindow(model string, windows map[string]int64) int64 {

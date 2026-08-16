@@ -48,14 +48,24 @@ func classify(comm, cmdline string) string {
 }
 
 func firstArgBase(cmdline string) string {
-	exe := strings.TrimSpace(cmdline)
-	if i := strings.IndexAny(exe, " \t"); i >= 0 {
-		exe = exe[:i]
-	}
-	if exe == "" {
+	args := argv(cmdline)
+	if len(args) == 0 {
 		return ""
 	}
-	return filepath.Base(exe)
+	return filepath.Base(args[0])
+}
+
+func argv(cmdline string) []string {
+	if strings.Contains(cmdline, "\x00") {
+		var out []string
+		for _, p := range strings.Split(cmdline, "\x00") {
+			if p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	return strings.Fields(cmdline)
 }
 
 // isSelfMonitor reports whether this process is the monitor itself.
@@ -69,14 +79,17 @@ func isSelfMonitor(comm, cmdline string) bool {
 }
 
 func flagValue(cmdline, name string) string {
-	fields := strings.Fields(cmdline)
-	for i := 0; i < len(fields)-1; i++ {
-		if fields[i] == name {
-			return fields[i+1]
+	args := argv(cmdline)
+	prefix := name + "="
+	for i := 0; i < len(args); i++ {
+		if args[i] == name {
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+			return ""
 		}
-		prefix := name + "="
-		if strings.HasPrefix(fields[i], prefix) {
-			return fields[i][len(prefix):]
+		if strings.HasPrefix(args[i], prefix) {
+			return args[i][len(prefix):]
 		}
 	}
 	return ""
@@ -123,8 +136,8 @@ func liveAgentProcs() map[int]Proc {
 		p := Proc{
 			PID:   pid,
 			Agent: agent,
-			CWD:   cwd,
-			Cmd:   strings.TrimSpace(cmd),
+			CWD:   SanitizeDisplay(cwd),
+			Cmd:   strings.TrimSpace(strings.ReplaceAll(cmd, "\x00", " ")),
 			Kids:  countChildren(pid),
 		}
 		p.RSSKB, p.CPU, p.Elapsed = statUsage(base, uptime, hz)
@@ -151,7 +164,7 @@ func commOf(pid int) string {
 }
 
 func cmdlineOf(pid int) string {
-	return strings.ReplaceAll(string(readFileBytes(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))), "\x00", " ")
+	return string(readFileBytes(filepath.Join("/proc", strconv.Itoa(pid), "cmdline")))
 }
 
 func pidAliveAgent(pid int, want string) bool {

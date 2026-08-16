@@ -8,6 +8,11 @@ import (
 	"github.com/screenleon/agent-usage/internal/collect"
 )
 
+// sortSessions orders by status, then agent, then PID without mutating input.
+// Steps:
+// 1. Build an unsorted session slice spanning busy/run/idle and duplicate keys.
+// 2. Call sortSessions and snapshot the original PIDs.
+// 3. Expect the documented key order and an unchanged input slice.
 func TestSortSessions(t *testing.T) {
 	in := []collect.Session{
 		{Status: "idle", Agent: "grok", PID: 2},
@@ -38,6 +43,11 @@ func TestSortSessions(t *testing.T) {
 	}
 }
 
+// TruncTitle flattens newlines, honors the 40-byte limit, and strips ESC.
+// Steps:
+// 1. Pass a multiline title, 40-byte, 41-byte, and ESC-bearing strings.
+// 2. Call TruncTitle with limit 40.
+// 3. Expect one line, exact 40 preserved, 41 clipped, and no ESC remaining.
 func TestTruncTitle(t *testing.T) {
 	if g := TruncTitle("  hello\nworld  ", 40); g != "hello world" {
 		t.Fatalf("newline: %q", g)
@@ -49,5 +59,9 @@ func TestTruncTitle(t *testing.T) {
 	over := strings.Repeat("b", 41)
 	if g := TruncTitle(over, 40); g != strings.Repeat("b", 40) {
 		t.Fatalf("41-byte: %q", g)
+	}
+	hostile := TruncTitle("/tmp/\x1b]52;c;evil\x07x", 40)
+	if strings.ContainsRune(hostile, 0x1b) || strings.ContainsRune(hostile, 0x07) {
+		t.Fatalf("control bytes remain: %q", hostile)
 	}
 }
