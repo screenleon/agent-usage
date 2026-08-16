@@ -22,10 +22,48 @@ func querySQLiteMaps(db, sql string, args ...string) []map[string]string {
 	}
 	cmd := exec.Command(bin, "-readonly", "-batch", "-json", db, q)
 	out, err := cmd.Output()
+	if err == nil && len(out) > 0 {
+		if rows := parseSQLiteJSON(out); rows != nil {
+			return rows
+		}
+	}
+	// Older sqlite3 builds lack -json; flatten newlines in the query and
+	// parse USV rows so titles cannot split columns.
+	fb := exec.Command(bin, "-readonly", "-batch", "-header", "-separator", "\x1f", db, flattenSQLNewlines(q))
+	out, err = fb.Output()
 	if err != nil || len(out) == 0 {
 		return nil
 	}
-	return parseSQLiteJSON(out)
+	return parseSQLiteUSV(out)
+}
+
+func flattenSQLNewlines(sql string) string {
+	return strings.ReplaceAll(sql, "title", "replace(replace(title, char(10), ' '), char(13), ' ')")
+}
+
+func parseSQLiteUSV(out []byte) []map[string]string {
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) < 2 {
+		return nil
+	}
+	heads := strings.Split(lines[0], "\x1f")
+	var rows []map[string]string
+	for _, line := range lines[1:] {
+		if line == "" {
+			continue
+		}
+		cols := strings.Split(line, "\x1f")
+		m := make(map[string]string, len(heads))
+		for i, h := range heads {
+			if i < len(cols) {
+				m[h] = cols[i]
+			} else {
+				m[h] = ""
+			}
+		}
+		rows = append(rows, m)
+	}
+	return rows
 }
 
 func parseSQLiteJSON(out []byte) []map[string]string {

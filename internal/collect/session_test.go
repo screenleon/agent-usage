@@ -75,8 +75,28 @@ func TestClaudeWindow(t *testing.T) {
 	if claudeWindow("claude-sonnet-4-5-1m") != 1_000_000 {
 		t.Fatal("1m window")
 	}
+}
+
+// ctxPct rejects invalid inputs and caps percentages at 999.
+// Steps:
+// 1. Call ctxPct with negative usage, a zero window, an exact full window, and a huge overage.
+// 2. Compare each result to the documented label.
+// 3. Expect empty strings for invalid input, 100% at the boundary, and 999% when capped.
+func TestCtxPct(t *testing.T) {
+	if ctxPct(-1, 200_000) != "" {
+		t.Fatal("negative usage")
+	}
+	if ctxPct(100, 0) != "" {
+		t.Fatal("zero window")
+	}
+	if ctxPct(200_000, 200_000) != "100%" {
+		t.Fatal("exact boundary")
+	}
+	if ctxPct(1e12, 1) != "999%" {
+		t.Fatal("over cap")
+	}
 	if ctxPct(100_000, 200_000) != "50%" {
-		t.Fatalf("ctxPct=%s", ctxPct(100_000, 200_000))
+		t.Fatal("happy")
 	}
 }
 
@@ -169,6 +189,19 @@ func TestGrokSignalsParse(t *testing.T) {
 // 1. Pass a value containing a quote.
 // 2. Call escapeSQL.
 // 3. Expect the quote to be doubled.
+// parseSQLiteUSV maps header and unit-separated rows after a -json fallback.
+// Steps:
+// 1. Feed a two-line USV table with tokens, title, and model.
+// 2. Call parseSQLiteUSV.
+// 3. Expect one map with those column names.
+func TestParseSQLiteUSV(t *testing.T) {
+	raw := []byte("tokens_used\x1ftitle\x1fmodel\n56000\x1fok\x1fgpt-5.6-terra\n")
+	rows := parseSQLiteUSV(raw)
+	if len(rows) != 1 || rows[0]["model"] != "gpt-5.6-terra" || rows[0]["tokens_used"] != "56000" {
+		t.Fatalf("got %#v", rows)
+	}
+}
+
 func TestEscapeSQL(t *testing.T) {
 	if g := escapeSQL("a'b"); g != "a''b" {
 		t.Fatalf("got %s", g)
@@ -241,6 +274,20 @@ INSERT INTO threads VALUES ('t3','/tmp/fallback','ok',129200,0,2000000000,'');
 	// no tokens from sqlite; Ctx stays empty
 	if fromFlag.Tokens != nil {
 		t.Fatalf("no-row should not invent tokens: %#v", fromFlag)
+	}
+}
+
+// leftoverSession marks a Codex exec process busy and titles it exec when SQLite has no title.
+// Steps:
+// 1. Build a Codex exec Proc whose cwd has no matching sqlite row.
+// 2. Call leftoverSession.
+// 3. Expect status busy and title exec.
+func TestLeftoverSessionCodexExecFallback(t *testing.T) {
+	home := t.TempDir()
+	p := Proc{PID: 42, Agent: "codex", CWD: "/tmp/no-thread", Cmd: "codex exec --json"}
+	s := leftoverSession(p, home, nil)
+	if s.Status != "busy" || s.Title != "exec" {
+		t.Fatalf("got status=%q title=%q", s.Status, s.Title)
 	}
 }
 

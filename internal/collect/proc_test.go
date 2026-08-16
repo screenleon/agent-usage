@@ -72,6 +72,26 @@ func TestFlagValue(t *testing.T) {
 	}
 }
 
+// resolveCWD joins a relative --cd onto the process cwd and keeps absolute paths.
+// Steps:
+// 1. Choose a process cwd and relative, absolute, and empty --cd values.
+// 2. Call resolveCWD.
+// 3. Expect the joined absolute path only for the relative input.
+func TestResolveCWD(t *testing.T) {
+	if g := resolveCWD("/home/u/proj", "."); g != "/home/u/proj" {
+		t.Fatalf("dot: %q", g)
+	}
+	if g := resolveCWD("/home/u/proj", "subdir"); g != "/home/u/proj/subdir" {
+		t.Fatalf("rel: %q", g)
+	}
+	if g := resolveCWD("/home/u/proj", "/abs/path"); g != "/abs/path" {
+		t.Fatalf("abs: %q", g)
+	}
+	if g := resolveCWD("/home/u/proj", ""); g != "/home/u/proj" {
+		t.Fatalf("empty: %q", g)
+	}
+}
+
 // parseChildPIDs keeps only decimal process IDs from a children file.
 // Steps:
 // 1. Feed empty, whitespace, malformed, and multi-id strings.

@@ -54,17 +54,7 @@ func Collect(opt Options) Snapshot {
 		if used[pid] {
 			continue
 		}
-		st := "run"
-		if p.Agent == "codex" && strings.Contains(p.Cmd, " exec ") {
-			st = "busy"
-		}
-		s := sessionFromProc(p, st)
-		if p.Agent == "codex" {
-			enrichCodex(&s, opt.Home, p.CWD, p.Cmd, codexWin)
-			if s.Title == "" && strings.Contains(p.Cmd, " exec ") {
-				s.Title = "exec"
-			}
-		}
+		s := leftoverSession(p, opt.Home, codexWin)
 		rows = append(rows, s)
 		used[pid] = true
 	}
@@ -72,6 +62,26 @@ func Collect(opt Options) Snapshot {
 		rows = append(rows, recentCodexIdle(opt.Home, rows, opt.RecentFor, codexWin)...)
 	}
 	return Snapshot{Taken: time.Now(), Sessions: rows}
+}
+
+func leftoverSession(p Proc, home string, windows map[string]int64) Session {
+	st := "run"
+	if p.Agent == "codex" && isCodexExec(p.Cmd) {
+		st = "busy"
+	}
+	s := sessionFromProc(p, st)
+	if p.Agent == "codex" {
+		enrichCodex(&s, home, p.CWD, p.Cmd, windows)
+		if s.Title == "" && isCodexExec(p.Cmd) {
+			s.Title = "exec"
+		}
+	}
+	return s
+}
+
+func isCodexExec(cmd string) bool {
+	return strings.Contains(cmd, " exec ") || strings.Contains(cmd, "\x00exec\x00") ||
+		strings.HasSuffix(cmd, " exec") || strings.HasSuffix(cmd, "\x00exec")
 }
 
 func sessionFromProc(p Proc, st string) Session {

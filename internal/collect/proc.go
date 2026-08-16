@@ -78,6 +78,19 @@ func isSelfMonitor(comm, cmdline string) bool {
 	return firstArgBase(cmdline) == "agent-usage"
 }
 
+func resolveCWD(procCWD, cd string) string {
+	if cd == "" {
+		return procCWD
+	}
+	if filepath.IsAbs(cd) {
+		return cd
+	}
+	if procCWD == "" || procCWD == "?" {
+		return cd
+	}
+	return filepath.Clean(filepath.Join(procCWD, cd))
+}
+
 func flagValue(cmdline, name string) string {
 	args := argv(cmdline)
 	prefix := name + "="
@@ -129,10 +142,7 @@ func liveAgentProcs() map[int]Proc {
 		if agent == "" {
 			continue
 		}
-		cwd := readCWD(pid)
-		if cd := flagValue(cmd, "--cd"); cd != "" {
-			cwd = cd
-		}
+		cwd := resolveCWD(readCWD(pid), flagValue(cmd, "--cd"))
 		p := Proc{
 			PID:   pid,
 			Agent: agent,
