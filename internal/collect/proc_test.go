@@ -21,6 +21,9 @@ func TestClassify(t *testing.T) {
 		{"node", "/usr/bin/node /home/u/.local/bin/claude", "claude"},
 		{"bash", "agent-usage", ""},
 		{"codex-code-mode", "/home/u/.codex/bin/codex-code-mode-host", ""},
+		{"MainThread", "/usr/local/bin/codex\x00exec\x00--json", "codex"},
+		{"other", "/usr/local/bin/codex --json", "codex"},
+		{"other", "/usr/bin/notcodex", ""},
 	}
 	for _, c := range cases {
 		if g := classify(c.comm, c.cmd); g != c.want {

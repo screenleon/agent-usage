@@ -16,6 +16,7 @@ type Proc struct {
 	CWD     string
 	Kids    int
 	Cmd     string
+	Raw     string
 }
 
 func classify(comm, cmdline string) string {
@@ -148,6 +149,7 @@ func liveAgentProcs() map[int]Proc {
 			Agent: agent,
 			CWD:   SanitizeDisplay(cwd),
 			Cmd:   strings.TrimSpace(strings.ReplaceAll(cmd, "\x00", " ")),
+			Raw:   cmd,
 			Kids:  countChildren(pid),
 		}
 		p.RSSKB, p.CPU, p.Elapsed = statUsage(base, uptime, hz)

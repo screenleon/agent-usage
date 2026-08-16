@@ -66,13 +66,17 @@ func Collect(opt Options) Snapshot {
 
 func leftoverSession(p Proc, home string, windows map[string]int64) Session {
 	st := "run"
-	if p.Agent == "codex" && isCodexExec(p.Cmd) {
+	src := p.Raw
+	if src == "" {
+		src = p.Cmd
+	}
+	if p.Agent == "codex" && isCodexExec(src) {
 		st = "busy"
 	}
 	s := sessionFromProc(p, st)
 	if p.Agent == "codex" {
-		enrichCodex(&s, home, p.CWD, p.Cmd, windows)
-		if s.Title == "" && isCodexExec(p.Cmd) {
+		enrichCodex(&s, home, p.CWD, src, windows)
+		if s.Title == "" && isCodexExec(src) {
 			s.Title = "exec"
 		}
 	}
@@ -80,8 +84,19 @@ func leftoverSession(p Proc, home string, windows map[string]int64) Session {
 }
 
 func isCodexExec(cmd string) bool {
-	return strings.Contains(cmd, " exec ") || strings.Contains(cmd, "\x00exec\x00") ||
-		strings.HasSuffix(cmd, " exec") || strings.HasSuffix(cmd, "\x00exec")
+	args := argv(cmd)
+	skip := map[string]bool{"--cd": true, "-m": true, "--model": true, "-c": true}
+	for i := 1; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "-") {
+			if skip[a] {
+				i++
+			}
+			continue
+		}
+		return a == "exec"
+	}
+	return false
 }
 
 func sessionFromProc(p Proc, st string) Session {

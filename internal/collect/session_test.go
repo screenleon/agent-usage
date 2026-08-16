@@ -132,6 +132,27 @@ func TestParseSQLiteJSONKeepsModelAcrossTitleNewlines(t *testing.T) {
 // 1. Write a models_cache.json with a 95% effective window.
 // 2. Call loadCodexWindows.
 // 3. Expect 272000*95/100 for gpt-5.6-terra.
+// codexWindow uses the cache, then a gpt-5/empty fallback, else zero.
+// Steps:
+// 1. Build a one-entry window map.
+// 2. Call codexWindow for a hit, empty model, gpt-5 miss, and unknown slug.
+// 3. Expect 258400, fallback 258400, fallback 258400, and 0.
+func TestCodexWindow(t *testing.T) {
+	win := map[string]int64{"gpt-5.6-terra": 258400}
+	if g := codexWindow("gpt-5.6-terra", win); g != 258400 {
+		t.Fatalf("hit %d", g)
+	}
+	if g := codexWindow("", win); g != 272000*95/100 {
+		t.Fatalf("empty %d", g)
+	}
+	if g := codexWindow("gpt-5.4-missing", win); g != 272000*95/100 {
+		t.Fatalf("gpt-5 miss %d", g)
+	}
+	if g := codexWindow("mystery-model", win); g != 0 {
+		t.Fatalf("unknown %d", g)
+	}
+}
+
 func TestLoadCodexWindows(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, ".codex")
@@ -325,6 +346,26 @@ INSERT INTO threads VALUES ('t3','/tmp/fallback','ok',129200,0,2000000000,'');
 // 1. Build a Codex exec Proc whose cwd has no matching sqlite row.
 // 2. Call leftoverSession.
 // 3. Expect status busy and title exec.
+// isCodexExec treats exec as an argv token, not a substring in paths or prompts.
+// Steps:
+// 1. Feed genuine exec argv plus commands whose path or prompt contains " exec ".
+// 2. Call isCodexExec.
+// 3. Expect true only for the exec subcommand.
+func TestIsCodexExec(t *testing.T) {
+	if !isCodexExec("codex exec --json") || !isCodexExec("codex\x00exec\x00--cd\x00/tmp") {
+		t.Fatal("genuine exec")
+	}
+	if isCodexExec("codex") || isCodexExec("codex resume") {
+		t.Fatal("non-exec")
+	}
+	if isCodexExec("codex please exec something") {
+		t.Fatal("prompt words")
+	}
+	if isCodexExec("codex\x00--cd\x00/work/My exec dir\x00resume") {
+		t.Fatal("spaced path as --cd value")
+	}
+}
+
 func TestLeftoverSessionCodexExecFallback(t *testing.T) {
 	home := t.TempDir()
 	p := Proc{PID: 42, Agent: "codex", CWD: "/tmp/no-thread", Cmd: "codex exec --json"}
