@@ -81,7 +81,7 @@ func writeClaude(w io.Writer, c quota.Claude) {
 	}
 	fmt.Fprintf(w, "  claude  5h used %s remaining %s  reset %s  (%s)\n",
 		u5, r5, fmtUnixClock(c.Reset5h), age)
-	fmt.Fprintf(w, "          7d used %s remaining %s  reset %s\n", u7, r7, fmtUnixClock(c.Reset7d))
+	fmt.Fprintf(w, "          7d used %s remaining %s  reset %s\n", u7, r7, fmtUnixDateTime(c.Reset7d))
 }
 
 func writeGrok(w io.Writer, g quota.Grok) {
@@ -168,6 +168,13 @@ func fmtUnixClock(ts int64) string {
 		return "-"
 	}
 	return time.Unix(ts, 0).Format("15:04")
+}
+
+func fmtUnixDateTime(ts int64) string {
+	if ts <= 0 {
+		return "-"
+	}
+	return time.Unix(ts, 0).Format("01-02 15:04")
 }
 
 func fmtDur(sec int64) string {
