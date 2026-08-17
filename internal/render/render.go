@@ -74,14 +74,14 @@ func writeClaude(w io.Writer, c quota.Claude) {
 		return
 	}
 	u5, r5 := pctPair(c.Used5h)
-	u7, _ := pctPair(c.Used7d)
+	u7, r7 := pctPair(c.Used7d)
 	age := "?"
 	if c.Updated > 0 {
 		age = strconv.FormatInt((time.Now().Unix()-c.Updated)/60, 10) + "min ago"
 	}
 	fmt.Fprintf(w, "  claude  5h used %s remaining %s  reset %s  (%s)\n",
 		u5, r5, fmtUnixClock(c.Reset5h), age)
-	fmt.Fprintf(w, "          7d used %s\n", u7)
+	fmt.Fprintf(w, "          7d used %s remaining %s  reset %s\n", u7, r7, fmtUnixClock(c.Reset7d))
 }
 
 func writeGrok(w io.Writer, g quota.Grok) {
