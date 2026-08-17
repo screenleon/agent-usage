@@ -9,6 +9,7 @@ trap 'rm -rf "$tmp"' EXIT
 amd64_name=agent-usage-linux-amd64
 arm64_name=agent-usage-linux-arm64
 workflow="$root/.github/workflows/release.yml"
+ci_workflow="$root/.github/workflows/ci.yml"
 makefile="$root/Makefile"
 
 fail() {
@@ -90,8 +91,20 @@ assert_workflow_contract() {
 	return 0
 }
 
+# PR/main CI must test and build; it must not publish.
+assert_ci_contract() {
+	local wf=$1
+	grep -q 'pull_request:' "$wf" || return 1
+	grep -q 'run: make test' "$wf" || return 1
+	grep -q 'run: make build' "$wf" || return 1
+	! grep -q 'action-gh-release' "$wf" || return 1
+	return 0
+}
+
 assert_action_pins "$workflow" || fail "mutable or missing action pin in $workflow"
 assert_workflow_contract "$workflow" || fail "release workflow missing trigger/test/release/dist contract"
+assert_action_pins "$ci_workflow" || fail "mutable or missing action pin in $ci_workflow"
+assert_ci_contract "$ci_workflow" || fail "ci workflow missing pull_request/test/build contract"
 
 # Prove those assertions reject the mutations QA named.
 mut=$(mktemp)
@@ -100,6 +113,12 @@ for spec in 'v\*' 'make test' 'make release' 'files: dist/\*'; do
 	grep -v -E "$spec" "$workflow" >"$mut" || true
 	if assert_workflow_contract "$mut"; then
 		fail "workflow assertion did not reject mutation of $spec"
+	fi
+done
+for spec in 'pull_request:' 'make test' 'make build'; do
+	grep -v -E "$spec" "$ci_workflow" >"$mut" || true
+	if assert_ci_contract "$mut"; then
+		fail "ci assertion did not reject mutation of $spec"
 	fi
 done
 rm -f "$mut"
