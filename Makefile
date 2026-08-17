@@ -1,19 +1,24 @@
 PREFIX    ?= $(HOME)/.local
 BIN       := bin/agent-usage
-DIST      := dist
+DIST      ?= dist
 PKG       := ./cmd/agent-usage
 AMD64_BIN := $(DIST)/agent-usage-linux-amd64
 ARM64_BIN := $(DIST)/agent-usage-linux-arm64
 GO_BUILD  := CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w"
 
-.PHONY: build test install fmt release
+.PHONY: build test test-go test-release install fmt release
 
 build:
 	mkdir -p bin
 	$(GO_BUILD) -o $(BIN) $(PKG)
 
-test:
+test: test-go test-release
+
+test-go:
 	go test ./...
+
+test-release:
+	bash tests/release_test.sh
 
 fmt:
 	gofmt -w cmd internal

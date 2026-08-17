@@ -54,13 +54,17 @@ case "$arch" in
   aarch64|arm64) suffix=arm64 ;;
   *) echo "unsupported arch: $arch" >&2; exit 1 ;;
 esac
+base=https://github.com/screenleon/agent-usage/releases/latest/download
+dir=$(mktemp -d)
+curl -fsSL -o "$dir/agent-usage-linux-${suffix}" "$base/agent-usage-linux-${suffix}"
+curl -fsSL -o "$dir/SHA256SUMS" "$base/SHA256SUMS"
+(cd "$dir" && sha256sum -c SHA256SUMS --ignore-missing)
 mkdir -p ~/.local/bin
-curl -fsSL -o ~/.local/bin/agent-usage \
-  "https://github.com/screenleon/agent-usage/releases/latest/download/agent-usage-linux-${suffix}"
-chmod +x ~/.local/bin/agent-usage
+install -m 755 "$dir/agent-usage-linux-${suffix}" ~/.local/bin/agent-usage
+rm -rf "$dir"
 ```
 
-Checksums for each tag are in `SHA256SUMS` on the [release](https://github.com/screenleon/agent-usage/releases/latest).
+`SHA256SUMS` on the [release](https://github.com/screenleon/agent-usage/releases/latest) lists both architectures; `--ignore-missing` checks only the file you downloaded.
 
 ### Build from source
 
