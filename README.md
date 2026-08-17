@@ -27,7 +27,7 @@ agent-usage --json
 | Grok remaining | `GET …/v1/billing?format=credits` | cached 60s under `~/.cache/agent-usage/` |
 | Codex remaining | `GET …/wham/usage` | same 60s cache |
 
-Quota HTTP uses the tokens already stored in `~/.grok/auth.json` and `~/.codex/auth.json`. Those files are never printed or copied.
+Quota HTTP uses the tokens already stored in `~/.grok/auth.json` and `~/.codex/auth.json`. Those files are never printed or copied. A Grok **401** means the stored access token is stale: start `grok` once so the CLI can refresh it. That is not a prompt to run `grok login` unless refresh itself fails.
 
 ## Why Go
 
