@@ -1,4 +1,5 @@
 /bin/
+/dist/
 /agent-usage
 *.test
 *.out
