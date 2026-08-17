@@ -37,7 +37,7 @@ For this tool:
 
 | Option | Fit |
 | --- | --- |
-| **Go (this repo)** | one static-ish binary, stdlib HTTP/JSON, long-lived `watch` loop, no interpreter respawn |
+| **Go (this repo)** | one static Linux binary (`CGO_ENABLED=0`), stdlib HTTP/JSON, long-lived `watch` loop, no interpreter respawn |
 | Rust | lowest RSS, but same I/O-bound work; more code for the same `/proc` + JSON reads |
 | Python / bash | fine for a one-shot; `watch` that forks Python every 2s is the waste we removed |
 
@@ -45,13 +45,36 @@ If resident size ever matters more than compile speed, a Rust port can keep the 
 
 ## Install
 
+Linux only (reads `/proc`). No Go toolchain required. Optional: `sqlite3` on `PATH` for Codex tokens/CTX (`-json` preferred; older binaries fall back to USV, flattening newlines and USV bytes in titles so later columns stay aligned).
+
+```bash
+arch=$(uname -m)
+case "$arch" in
+  x86_64) suffix=amd64 ;;
+  aarch64|arm64) suffix=arm64 ;;
+  *) echo "unsupported arch: $arch" >&2; exit 1 ;;
+esac
+base=https://github.com/screenleon/agent-usage/releases/latest/download
+dir=$(mktemp -d)
+curl -fsSL -o "$dir/agent-usage-linux-${suffix}" "$base/agent-usage-linux-${suffix}"
+curl -fsSL -o "$dir/SHA256SUMS" "$base/SHA256SUMS"
+(cd "$dir" && sha256sum -c SHA256SUMS --ignore-missing)
+mkdir -p ~/.local/bin
+install -m 755 "$dir/agent-usage-linux-${suffix}" ~/.local/bin/agent-usage
+rm -rf "$dir"
+```
+
+`SHA256SUMS` is on the same GitHub Release as the binary and lists both architectures; `--ignore-missing` checks only the file you downloaded. That step detects a truncated or corrupted download. It does not authenticate the publisher: a substituted binary shipped with a matching `SHA256SUMS` from the same URL will still pass. Trust the file only if you trust this repository's releases.
+
+### Build from source
+
 ```bash
 git clone git@github.com:screenleon/agent-usage.git
 cd agent-usage
 make install          # -> ~/.local/bin/agent-usage
 ```
 
-Requires Go 1.21+ and Linux `/proc`. Optional: `sqlite3` on `PATH` for Codex tokens/CTX (`-json` preferred; older binaries fall back to USV, flattening newlines and USV bytes in titles so later columns stay aligned).
+Requires Go 1.21+. `make release` writes `dist/agent-usage-linux-{amd64,arm64}` for copying to machines that only need the binary.
 
 ## Not in scope
 
