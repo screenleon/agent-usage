@@ -136,7 +136,7 @@ func fetchGrok(opt Options) Grok {
 		return Grok{Error: "grok billing: " + err.Error()}
 	}
 	if st == 401 {
-		return Grok{Error: "grok token expired — run grok login"}
+		return Grok{Error: "token stale — start grok to refresh (not login)"}
 	}
 	if st != 200 {
 		return Grok{Error: "grok billing HTTP " + strconv.Itoa(st)}
