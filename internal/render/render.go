@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -42,13 +43,9 @@ func Snapshot(w io.Writer, snap collect.Snapshot, q *quota.Report, interval time
 			if s.Tokens != nil {
 				tok = fmtTok(*s.Tokens)
 			}
-			loc := s.Dir
+			loc := collect.SanitizeDisplay(s.Dir)
 			if s.Title != "" && s.Title != s.Dir {
-				t := s.Title
-				if len(t) > 40 {
-					t = t[:40]
-				}
-				loc = loc + " · " + t
+				loc = loc + " · " + TruncTitle(s.Title, 40)
 			}
 			if s.Kids > 0 {
 				loc += fmt.Sprintf(" +%d", s.Kids)
@@ -137,11 +134,7 @@ func pctPair(used *float64) (string, string) {
 	if used == nil {
 		return "?", "?"
 	}
-	r := 100 - *used
-	if r < 0 {
-		r = 0
-	}
-	return fmtPct(*used), fmtPct(r)
+	return fmtPct(*used), fmtPct(quota.Remaining(*used))
 }
 
 func fmtPct(v float64) string {
@@ -220,19 +213,23 @@ func or(a, b string) string {
 func sortSessions(in []collect.Session) []collect.Session {
 	out := append([]collect.Session(nil), in...)
 	rank := map[string]int{"busy": 0, "run": 1, "idle": 2}
-	for i := 0; i < len(out); i++ {
-		for j := i + 1; j < len(out); j++ {
-			ri, rj := rank[out[i].Status], rank[out[j].Status]
-			if rj < ri || (rj == ri && (out[j].Agent < out[i].Agent || (out[j].Agent == out[i].Agent && out[j].PID < out[i].PID))) {
-				out[i], out[j] = out[j], out[i]
-			}
+	sort.Slice(out, func(i, j int) bool {
+		ri, rj := rank[out[i].Status], rank[out[j].Status]
+		if ri != rj {
+			return ri < rj
 		}
-	}
+		if out[i].Agent != out[j].Agent {
+			return out[i].Agent < out[j].Agent
+		}
+		return out[i].PID < out[j].PID
+	})
 	return out
 }
 
 func TruncTitle(s string, n int) string {
-	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = collect.SanitizeDisplay(s)
+	s = strings.TrimSpace(s)
 	if len(s) > n {
 		return s[:n]
 	}

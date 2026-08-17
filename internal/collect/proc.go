@@ -16,6 +16,7 @@ type Proc struct {
 	CWD     string
 	Kids    int
 	Cmd     string
+	Raw     string
 }
 
 func classify(comm, cmdline string) string {
@@ -33,6 +34,85 @@ func classify(comm, cmdline string) string {
 	if comm == "node" {
 		if strings.Contains(cmdline, "/bin/claude") || strings.HasSuffix(strings.TrimSpace(cmdline), "/claude") {
 			return "claude"
+		}
+	}
+	// comm can be a versioned binary; match the executable basename only.
+	switch firstArgBase(cmdline) {
+	case "codex":
+		return "codex"
+	case "claude":
+		return "claude"
+	case "opencode":
+		return "opencode"
+	}
+	return ""
+}
+
+func firstArgBase(cmdline string) string {
+	args := argv(cmdline)
+	if len(args) == 0 {
+		return ""
+	}
+	return filepath.Base(args[0])
+}
+
+func argv(cmdline string) []string {
+	if strings.Contains(cmdline, "\x00") {
+		var out []string
+		for _, p := range strings.Split(cmdline, "\x00") {
+			if p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	return strings.Fields(cmdline)
+}
+
+// isSelfMonitor reports whether this process is the monitor itself.
+// Only the executable name is checked — never the rest of argv, or a
+// `codex --cd …/agent-usage` session is dropped.
+func isSelfMonitor(comm, cmdline string) bool {
+	if comm == "agent-usage" {
+		return true
+	}
+	return firstArgBase(cmdline) == "agent-usage"
+}
+
+func resolveCWD(procCWD, cd string) string {
+	if cd == "" {
+		return procCWD
+	}
+	if filepath.IsAbs(cd) {
+		return cd
+	}
+	if procCWD == "" || procCWD == "?" {
+		return cd
+	}
+	return filepath.Clean(filepath.Join(procCWD, cd))
+}
+
+func firstFlagValue(cmdline string, names ...string) string {
+	for _, name := range names {
+		if v := flagValue(cmdline, name); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func flagValue(cmdline, name string) string {
+	args := argv(cmdline)
+	prefix := name + "="
+	for i := 0; i < len(args); i++ {
+		if args[i] == name {
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+			return ""
+		}
+		if strings.HasPrefix(args[i], prefix) {
+			return args[i][len(prefix):]
 		}
 	}
 	return ""
@@ -64,19 +144,21 @@ func liveAgentProcs() map[int]Proc {
 		}
 		base := filepath.Join("/proc", e.Name())
 		comm := readFileTrim(filepath.Join(base, "comm"))
-		cmd := strings.ReplaceAll(string(readFileBytes(filepath.Join(base, "cmdline"))), "\x00", " ")
-		if strings.Contains(cmd, "agent-usage") {
+		cmd := cmdlineOf(pid)
+		if isSelfMonitor(comm, cmd) {
 			continue
 		}
 		agent := classify(comm, cmd)
 		if agent == "" {
 			continue
 		}
+		cwd := resolveCWD(readCWD(pid), firstFlagValue(cmd, "--cd", "-C"))
 		p := Proc{
 			PID:   pid,
 			Agent: agent,
-			CWD:   readCWD(pid),
-			Cmd:   strings.TrimSpace(cmd),
+			CWD:   SanitizeDisplay(cwd),
+			Cmd:   strings.TrimSpace(strings.ReplaceAll(cmd, "\x00", " ")),
+			Raw:   cmd,
 			Kids:  countChildren(pid),
 		}
 		p.RSSKB, p.CPU, p.Elapsed = statUsage(base, uptime, hz)
@@ -103,7 +185,7 @@ func commOf(pid int) string {
 }
 
 func cmdlineOf(pid int) string {
-	return strings.ReplaceAll(string(readFileBytes(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))), "\x00", " ")
+	return string(readFileBytes(filepath.Join("/proc", strconv.Itoa(pid), "cmdline")))
 }
 
 func pidAliveAgent(pid int, want string) bool {
@@ -116,34 +198,37 @@ func pidAliveAgent(pid int, want string) bool {
 	return classify(commOf(pid), cmdlineOf(pid)) == want
 }
 
-func countChildren(pid int) int {
-	// Linux exposes children as a space-separated pid list.
+func childPIDs(pid int) []int {
 	path := filepath.Join("/proc", strconv.Itoa(pid), "task", strconv.Itoa(pid), "children")
-	s := readFileTrim(path)
-	if s == "" {
-		return 0
-	}
-	n := 0
-	for _, f := range strings.Fields(s) {
-		if _, err := strconv.Atoi(f); err == nil {
-			n++
-		}
-	}
-	return n
+	return parseChildPIDs(readFileTrim(path))
 }
 
-func childCmdlines(pid int) []string {
-	path := filepath.Join("/proc", strconv.Itoa(pid), "task", strconv.Itoa(pid), "children")
-	s := readFileTrim(path)
-	if s == "" {
+func parseChildPIDs(s string) []int {
+	if strings.TrimSpace(s) == "" {
 		return nil
 	}
-	var out []string
+	var out []int
 	for _, f := range strings.Fields(s) {
 		c, err := strconv.Atoi(f)
 		if err != nil {
 			continue
 		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func countChildren(pid int) int {
+	return len(childPIDs(pid))
+}
+
+func childCmdlines(pid int) []string {
+	ids := childPIDs(pid)
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ids))
+	for _, c := range ids {
 		out = append(out, cmdlineOf(c))
 	}
 	return out

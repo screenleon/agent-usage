@@ -19,7 +19,8 @@ agent-usage --json
 | --- | --- | --- |
 | Processes | `/proc/<pid>/{comm,cmdline,cwd,stat,children}` | only pids whose `comm` is claude / grok / codex / opencode |
 | Claude sessions | `~/.claude/sessions/<pid>.json` | skip if that pid is not a live `claude` |
-| Claude tokens | last **8KiB** of the matching project jsonl | no full history walk |
+| Claude tokens / CTX | last **8KiB** of the matching project jsonl ÷ 200k (or 1M if the model name contains `1m`) | no full history walk |
+| Codex tokens / CTX | `state_5.sqlite` `tokens_used` ÷ `models_cache.json` `context_window` (× effective %) | one cache file + one SQL row |
 | Grok sessions | `~/.grok/active_sessions.json`, `signals.json`, `summary.json` | never opens `updates.jsonl` |
 | Codex recent | `sqlite3 -readonly` on `~/.codex/state_5.sqlite` | only with `--recent` or a live `codex` process |
 | Claude quota | `~/.claude/rate-limits.json` | written by the existing StatusLine hook |
@@ -50,7 +51,7 @@ cd agent-usage
 make install          # -> ~/.local/bin/agent-usage
 ```
 
-Requires Go 1.21+ and Linux `/proc`. Optional: `sqlite3` on `PATH` for Codex `--recent`.
+Requires Go 1.21+ and Linux `/proc`. Optional: `sqlite3` on `PATH` for Codex tokens/CTX (`-json` preferred; older binaries fall back to USV, flattening newlines and USV bytes in titles so later columns stay aligned).
 
 ## Not in scope
 

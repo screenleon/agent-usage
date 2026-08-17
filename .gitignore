@@ -2,3 +2,8 @@
 /agent-usage
 *.test
 *.out
+
+.pm-dispatch
+.dispatch-results/
+.gate-briefs/
+.gate-results/

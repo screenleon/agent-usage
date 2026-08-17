@@ -6,6 +6,11 @@ import (
 	"testing"
 )
 
+// readClaude loads five-hour and seven-day used percentages from rate-limits.json.
+// Steps:
+// 1. Write a rate-limits.json under a temp home.
+// 2. Call readClaude.
+// 3. Expect used 17 and reset 200 on the five-hour window.
 func TestReadClaude(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, ".claude")
@@ -22,6 +27,22 @@ func TestReadClaude(t *testing.T) {
 	}
 }
 
+// Remaining is 100 minus used and never goes below zero.
+// Steps:
+// 1. Choose an in-range used percent and one above 100.
+// 2. Call Remaining.
+// 3. Expect 67 and 0.
+func TestRemaining(t *testing.T) {
+	if Remaining(33) != 67 || Remaining(120) != 0 {
+		t.Fatalf("Remaining(33)=%v Remaining(120)=%v", Remaining(33), Remaining(120))
+	}
+}
+
+// decodeWin fills remaining percent from used_percent.
+// Steps:
+// 1. Build a raw window with used 33.
+// 2. Call decodeWin.
+// 3. Expect remaining 67.
 func TestDecodeWin(t *testing.T) {
 	u := 33.0
 	w := decodeWin(&rawWin{UsedPercent: &u, WindowSeconds: 604800, ResetAfter: 10})
@@ -30,6 +51,11 @@ func TestDecodeWin(t *testing.T) {
 	}
 }
 
+// grokToken reads the first auth.json key field.
+// Steps:
+// 1. Write a one-entry auth.json.
+// 2. Call grokToken.
+// 3. Expect tok-1.
 func TestGrokToken(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, ".grok")

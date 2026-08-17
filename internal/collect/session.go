@@ -44,6 +44,7 @@ func Collect(opt Options) Snapshot {
 		opt.RecentFor = 2 * time.Hour
 	}
 	procs := liveAgentProcs()
+	codexWin := loadCodexWindows(opt.Home)
 	var rows []Session
 
 	used := map[int]bool{}
@@ -53,17 +54,74 @@ func Collect(opt Options) Snapshot {
 		if used[pid] {
 			continue
 		}
-		s := sessionFromProc(p, "run")
-		if p.Agent == "codex" {
-			enrichCodex(&s, opt.Home, p.CWD)
-		}
+		s := leftoverSession(p, opt.Home, codexWin)
 		rows = append(rows, s)
 		used[pid] = true
 	}
 	if opt.Recent {
-		rows = append(rows, recentCodexIdle(opt.Home, rows, opt.RecentFor)...)
+		rows = append(rows, recentCodexIdle(opt.Home, rows, opt.RecentFor, codexWin)...)
 	}
 	return Snapshot{Taken: time.Now(), Sessions: rows}
+}
+
+func leftoverSession(p Proc, home string, windows map[string]int64) Session {
+	st := "run"
+	src := p.Raw
+	if src == "" {
+		src = p.Cmd
+	}
+	if p.Agent == "codex" && isCodexExec(src) {
+		st = "busy"
+	}
+	s := sessionFromProc(p, st)
+	if p.Agent == "codex" {
+		enrichCodex(&s, home, p.CWD, src, windows)
+		if s.Title == "" && isCodexExec(src) {
+			s.Title = "exec"
+		}
+	}
+	return s
+}
+
+// Codex global flags that consume the next argv token (clap value options).
+// Boolean flags are omitted so their following token can still be the subcommand.
+var codexValueFlags = map[string]bool{
+	"-c": true, "--config": true,
+	"--enable": true, "--disable": true,
+	"--remote": true, "--remote-auth-token-env": true,
+	"-i": true, "--image": true,
+	"-m": true, "--model": true,
+	"--local-provider": true,
+	"-p":               true, "--profile": true,
+	"-s": true, "--sandbox": true,
+	"-C": true, "--cd": true,
+	"--add-dir": true,
+	"-a":        true, "--ask-for-approval": true,
+}
+
+func isCodexExec(cmd string) bool {
+	args := argv(cmd)
+	for i := 1; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			if i+1 < len(args) {
+				return isExecToken(args[i+1])
+			}
+			return false
+		}
+		if strings.HasPrefix(a, "-") {
+			if !strings.Contains(a, "=") && codexValueFlags[a] {
+				i++
+			}
+			continue
+		}
+		return isExecToken(a)
+	}
+	return false
+}
+
+func isExecToken(a string) bool {
+	return a == "exec" || a == "e"
 }
 
 func sessionFromProc(p Proc, st string) Session {
@@ -126,8 +184,11 @@ func claudeSessions(home string, procs map[int]Proc, used map[int]bool) []Sessio
 		if meta.CWD != "" {
 			s.Dir = shortPath(meta.CWD)
 		}
-		s.Title = meta.Name
-		s.Tokens = claudeTailTokens(home, meta.SessionID)
+		s.Title = SanitizeDisplay(meta.Name)
+		if tok, model, ok := claudeTail(home, meta.SessionID); ok {
+			s.Tokens = &tok
+			s.Ctx = ctxPct(tok, claudeWindow(model))
+		}
 		out = append(out, s)
 		used[pid] = true
 	}
@@ -150,26 +211,48 @@ func claudeHome(home string) string {
 }
 
 func claudeTailTokens(home, sid string) *float64 {
-	if sid == "" {
+	tok, _, ok := claudeTail(home, sid)
+	if !ok {
 		return nil
+	}
+	return &tok
+}
+
+func claudeTail(home, sid string) (tokens float64, model string, ok bool) {
+	if sid == "" {
+		return 0, "", false
 	}
 	root := filepath.Join(claudeHome(home), "projects")
 	matches, _ := filepath.Glob(filepath.Join(root, "*", sid+".jsonl"))
 	if len(matches) == 0 {
-		return nil
+		return 0, "", false
 	}
-	return lastUsageTokens(matches[0])
+	return lastUsage(matches[0])
+}
+
+type tokenUsage struct {
+	Input         float64 `json:"input_tokens"`
+	CacheRead     float64 `json:"cache_read_input_tokens"`
+	CacheCreation float64 `json:"cache_creation_input_tokens"`
 }
 
 func lastUsageTokens(path string) *float64 {
+	tok, _, ok := lastUsage(path)
+	if !ok {
+		return nil
+	}
+	return &tok
+}
+
+func lastUsage(path string) (tokens float64, model string, ok bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return 0, "", false
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
-		return nil
+		return 0, "", false
 	}
 	const tail = 8192
 	start := st.Size() - tail
@@ -178,7 +261,7 @@ func lastUsageTokens(path string) *float64 {
 	}
 	buf := make([]byte, st.Size()-start)
 	if _, err := f.ReadAt(buf, start); err != nil && len(buf) == 0 {
-		return nil
+		return 0, "", false
 	}
 	lines := strings.Split(string(buf), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -187,39 +270,83 @@ func lastUsageTokens(path string) *float64 {
 			continue
 		}
 		var o struct {
+			Model   string `json:"model"`
 			Message *struct {
-				Usage *struct {
-					Input         float64 `json:"input_tokens"`
-					CacheRead     float64 `json:"cache_read_input_tokens"`
-					CacheCreation float64 `json:"cache_creation_input_tokens"`
-				} `json:"usage"`
+				Model string      `json:"model"`
+				Usage *tokenUsage `json:"usage"`
 			} `json:"message"`
-			Usage *struct {
-				Input         float64 `json:"input_tokens"`
-				CacheRead     float64 `json:"cache_read_input_tokens"`
-				CacheCreation float64 `json:"cache_creation_input_tokens"`
-			} `json:"usage"`
+			Usage *tokenUsage `json:"usage"`
 		}
 		if json.Unmarshal([]byte(ln), &o) != nil {
 			continue
 		}
-		var u *struct {
-			Input         float64 `json:"input_tokens"`
-			CacheRead     float64 `json:"cache_read_input_tokens"`
-			CacheCreation float64 `json:"cache_creation_input_tokens"`
-		}
-		if o.Message != nil && o.Message.Usage != nil {
-			u = o.Message.Usage
-		} else if o.Usage != nil {
-			u = o.Usage
+		u := o.Usage
+		model = o.Model
+		if o.Message != nil {
+			if o.Message.Usage != nil {
+				u = o.Message.Usage
+			}
+			if o.Message.Model != "" {
+				model = o.Message.Model
+			}
 		}
 		if u == nil {
 			continue
 		}
-		sum := u.Input + u.CacheRead + u.CacheCreation
-		return &sum
+		return u.Input + u.CacheRead + u.CacheCreation, model, true
 	}
-	return nil
+	return 0, "", false
+}
+
+func claudeWindow(model string) int64 {
+	m := strings.ToLower(model)
+	if strings.Contains(m, "1m") {
+		return 1_000_000
+	}
+	return 200_000
+}
+
+func ctxPct(used float64, window int64) string {
+	if window <= 0 || used < 0 {
+		return ""
+	}
+	pct := int(used * 100 / float64(window))
+	if pct > 999 {
+		pct = 999
+	}
+	return strconv.Itoa(pct) + "%"
+}
+
+func loadCodexWindows(home string) map[string]int64 {
+	b, err := os.ReadFile(filepath.Join(home, ".codex", "models_cache.json"))
+	if err != nil {
+		return nil
+	}
+	var raw struct {
+		Models []struct {
+			Slug   string `json:"slug"`
+			Window int64  `json:"context_window"`
+			MaxWin int64  `json:"max_context_window"`
+			EffPct int64  `json:"effective_context_window_percent"`
+		} `json:"models"`
+	}
+	if json.Unmarshal(b, &raw) != nil {
+		return nil
+	}
+	out := make(map[string]int64, len(raw.Models))
+	for _, m := range raw.Models {
+		w := m.Window
+		if w <= 0 {
+			w = m.MaxWin
+		}
+		if m.EffPct > 0 && m.EffPct < 100 && w > 0 {
+			w = w * m.EffPct / 100
+		}
+		if m.Slug != "" && w > 0 {
+			out[m.Slug] = w
+		}
+	}
+	return out
 }
 
 func grokSessions(home string, procs map[int]Proc, used map[int]bool, recent bool) []Session {
@@ -337,19 +464,32 @@ func readGrokSummary(dir string) *grokSummary {
 	return &s
 }
 
-func enrichCodex(s *Session, home, cwd string) {
-	row := querySQLite(filepath.Join(home, ".codex", "state_5.sqlite"),
-		`SELECT tokens_used, title FROM threads WHERE archived=0 AND cwd=? ORDER BY updated_at DESC LIMIT 1`,
+func enrichCodex(s *Session, home, cwd, cmd string, windows map[string]int64) {
+	rows := querySQLiteMaps(filepath.Join(home, ".codex", "state_5.sqlite"),
+		`SELECT tokens_used, title, IFNULL(model,'') AS model FROM threads WHERE archived=0 AND cwd=? ORDER BY updated_at DESC LIMIT 1`,
 		cwd)
-	if len(row) >= 2 {
-		if t, err := strconv.ParseFloat(row[0], 64); err == nil {
+	model := flagValue(cmd, "-m")
+	if model == "" {
+		model = flagValue(cmd, "--model")
+	}
+	if len(rows) > 0 {
+		row := rows[0]
+		if t, err := strconv.ParseFloat(row["tokens_used"], 64); err == nil {
 			s.Tokens = &t
 		}
-		s.Title = firstLine(row[1])
+		if row["model"] != "" {
+			model = row["model"]
+		}
+		if t := tidyTitle(row["title"]); t != "" {
+			s.Title = t
+		}
+	}
+	if s.Tokens != nil {
+		s.Ctx = ctxPct(*s.Tokens, codexWindow(model, windows))
 	}
 }
 
-func recentCodexIdle(home string, existing []Session, window time.Duration) []Session {
+func recentCodexIdle(home string, existing []Session, window time.Duration, windows map[string]int64) []Session {
 	seen := map[string]bool{}
 	for _, r := range existing {
 		if r.Agent == "codex" && r.Live {
@@ -357,21 +497,19 @@ func recentCodexIdle(home string, existing []Session, window time.Duration) []Se
 		}
 	}
 	cutoff := time.Now().Add(-window).Unix()
-	rows := querySQLiteAll(filepath.Join(home, ".codex", "state_5.sqlite"),
-		`SELECT tokens_used, title, cwd FROM threads WHERE archived=0 AND updated_at>=? ORDER BY updated_at DESC LIMIT 8`,
+	rows := querySQLiteMaps(filepath.Join(home, ".codex", "state_5.sqlite"),
+		`SELECT tokens_used, title, cwd, IFNULL(model,'') AS model FROM threads WHERE archived=0 AND updated_at>=? ORDER BY updated_at DESC LIMIT 8`,
 		strconv.FormatInt(cutoff, 10))
 	var out []Session
 	for _, row := range rows {
-		if len(row) < 3 {
+		dir := shortPath(row["cwd"])
+		if dir == "?" || seen[dir] {
 			continue
 		}
-		dir := shortPath(row[2])
-		if seen[dir] {
-			continue
-		}
-		s := Session{Live: false, Status: "idle", Agent: "codex", Dir: dir, Title: firstLine(row[1])}
-		if t, err := strconv.ParseFloat(row[0], 64); err == nil {
+		s := Session{Live: false, Status: "idle", Agent: "codex", Dir: dir, Title: tidyTitle(row["title"])}
+		if t, err := strconv.ParseFloat(row["tokens_used"], 64); err == nil {
 			s.Tokens = &t
+			s.Ctx = ctxPct(t, codexWindow(row["model"], windows))
 		}
 		out = append(out, s)
 		seen[dir] = true
@@ -388,9 +526,9 @@ func shortPath(p string) string {
 		p = "~" + p[len(home):]
 	}
 	if i := strings.LastIndex(p, "/"); i >= 0 && i+1 < len(p) {
-		return p[i+1:]
+		p = p[i+1:]
 	}
-	return p
+	return SanitizeDisplay(p)
 }
 
 func firstLine(s string) string {
@@ -398,6 +536,26 @@ func firstLine(s string) string {
 		return strings.TrimSpace(s[:i])
 	}
 	return strings.TrimSpace(s)
+}
+
+func tidyTitle(s string) string {
+	s = firstLine(s)
+	if strings.HasPrefix(s, "schema_version:") {
+		return ""
+	}
+	return SanitizeDisplay(s)
+}
+
+func codexWindow(model string, windows map[string]int64) int64 {
+	if w := windows[model]; w > 0 {
+		return w
+	}
+	// Live exec often names the model; cache miss still needs a window
+	// so CTX is not blank when tokens are known.
+	if strings.HasPrefix(model, "gpt-5") || model == "" {
+		return 272000 * 95 / 100
+	}
+	return 0
 }
 
 func firstNonEmpty(ss ...string) string {
