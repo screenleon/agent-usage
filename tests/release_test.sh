@@ -65,13 +65,52 @@ fi
 mv "$amd64.bak" "$amd64"
 
 # Privileged release job must pin every action to a 40-char commit SHA.
-uses_lines=$(grep -E '^\s+uses: ' "$workflow" || true)
-[[ -n $uses_lines ]] || fail "no uses: entries in $workflow"
-while IFS= read -r line; do
-	ref=${line##*@}
-	ref=${ref%% *}
-	ref=${ref%%#*}
-	[[ $ref =~ ^[0-9a-f]{40}$ ]] || fail "mutable or short action ref: $line"
-done <<<"$uses_lines"
+assert_action_pins() {
+	local wf=$1
+	local uses_lines ref line
+	uses_lines=$(grep -E '^\s+uses: ' "$wf" || true)
+	[[ -n $uses_lines ]] || return 1
+	while IFS= read -r line; do
+		ref=${line##*@}
+		ref=${ref%% *}
+		ref=${ref%%#*}
+		[[ $ref =~ ^[0-9a-f]{40}$ ]] || return 1
+	done <<<"$uses_lines"
+	return 0
+}
+
+# Tag trigger, make test, make release, and dist/* publication.
+assert_workflow_contract() {
+	local wf=$1
+	grep -q 'tags:' "$wf" || return 1
+	grep -q -- '- "v\*"' "$wf" || return 1
+	grep -q 'run: make test' "$wf" || return 1
+	grep -q 'run: make release' "$wf" || return 1
+	grep -q 'files: dist/\*' "$wf" || return 1
+	return 0
+}
+
+assert_action_pins "$workflow" || fail "mutable or missing action pin in $workflow"
+assert_workflow_contract "$workflow" || fail "release workflow missing trigger/test/release/dist contract"
+
+# Prove those assertions reject the mutations QA named.
+mut=$(mktemp)
+trap 'rm -rf "$tmp" "$mut"' EXIT
+for spec in 'v\*' 'make test' 'make release' 'files: dist/\*'; do
+	grep -v -E "$spec" "$workflow" >"$mut" || true
+	if assert_workflow_contract "$mut"; then
+		fail "workflow assertion did not reject mutation of $spec"
+	fi
+done
+rm -f "$mut"
+
+# Same-origin SHA256SUMS is a corruption check, not publisher authentication.
+# A substituted binary plus a rewritten checksum file still verifies.
+echo substituted >"$tmp/agent-usage-linux-amd64"
+(cd "$tmp" && sha256sum "$amd64_name" "$arm64_name" >SHA256SUMS)
+(cd "$tmp" && sha256sum -c SHA256SUMS) >/dev/null || fail "rewritten same-origin checksums should still verify"
+readme="$root/README.md"
+grep -q 'does not authenticate the publisher' "$readme" || fail "README must state SHA256SUMS is not publisher authentication"
+grep -q 'same GitHub Release' "$readme" || fail "README must state checksum and binary share the release"
 
 echo "release_test: ok"

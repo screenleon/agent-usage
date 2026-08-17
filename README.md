@@ -64,7 +64,7 @@ install -m 755 "$dir/agent-usage-linux-${suffix}" ~/.local/bin/agent-usage
 rm -rf "$dir"
 ```
 
-`SHA256SUMS` on the [release](https://github.com/screenleon/agent-usage/releases/latest) lists both architectures; `--ignore-missing` checks only the file you downloaded.
+`SHA256SUMS` is on the same GitHub Release as the binary and lists both architectures; `--ignore-missing` checks only the file you downloaded. That step detects a truncated or corrupted download. It does not authenticate the publisher: a substituted binary shipped with a matching `SHA256SUMS` from the same URL will still pass. Trust the file only if you trust this repository's releases.
 
 ### Build from source
 
