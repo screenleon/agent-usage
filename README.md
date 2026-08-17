@@ -51,7 +51,7 @@ cd agent-usage
 make install          # -> ~/.local/bin/agent-usage
 ```
 
-Requires Go 1.21+ and Linux `/proc`. Optional: `sqlite3` on `PATH` for Codex tokens/CTX (`-json` preferred; older binaries fall back to USV so multiline titles still parse).
+Requires Go 1.21+ and Linux `/proc`. Optional: `sqlite3` on `PATH` for Codex tokens/CTX (`-json` preferred; older binaries fall back to USV, flattening newlines and USV bytes in titles so later columns stay aligned).
 
 ## Not in scope
 

@@ -350,6 +350,9 @@ func TestFlattenSQLNewlinesKeepsTitleAlias(t *testing.T) {
 	if !strings.Contains(got, "AS title") || !strings.Contains(got, "tokens_used") {
 		t.Fatalf("got %q", got)
 	}
+	if !strings.Contains(got, "char(31)") {
+		t.Fatalf("USV strip missing: %q", got)
+	}
 	if strings.Count(got, ", title,") != 0 {
 		t.Fatalf("bare title column remains: %q", got)
 	}
@@ -380,6 +383,42 @@ func TestQuerySQLiteMapsFallsBackWhenJSONUnsupported(t *testing.T) {
 	if len(rows) != 1 || rows[0]["title"] != "hello world" || rows[0]["model"] != "gpt-5.6-terra" || rows[0]["tokens_used"] != "56000" {
 		t.Fatalf("got %#v", rows)
 	}
+}
+
+// querySQLiteMaps USV fallback keeps model when title contains the delimiter.
+// Steps:
+// 1. Write a thread whose title includes U+001F and force sqlite3 to reject -json.
+// 2. Call enrichCodex with a known model window.
+// 3. Expect tokens_used, model, and a 50% CTX label.
+func TestQuerySQLiteMapsFallsBackWhenTitleContainsUSV(t *testing.T) {
+	home := t.TempDir()
+	writeCodexFixture(t, home, threadsSchema+`
+INSERT INTO threads VALUES ('t1','/tmp/usv','hello' || char(31) || 'world',129200,0,2000000000,'gpt-5.6-terra');
+`)
+	forceSQLiteUSVFallback(t)
+	s := Session{}
+	enrichCodex(&s, home, "/tmp/usv", "", map[string]int64{"gpt-5.6-terra": 258400})
+	if s.Tokens == nil || *s.Tokens != 129200 || s.Ctx != "50%" {
+		t.Fatalf("got %#v", s)
+	}
+}
+
+func forceSQLiteUSVFallback(t *testing.T) {
+	t.Helper()
+	real, err := exec.LookPath("sqlite3")
+	if err != nil {
+		t.Skip("sqlite3 not on PATH")
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = \"-json\" ]; then echo 'unknown option: -json' >&2; exit 1; fi\n" +
+		"done\n" +
+		"exec '" + strings.ReplaceAll(real, "'", "'\\''") + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "sqlite3"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func writeCodexFixture(t *testing.T, home, sql string) {
