@@ -229,6 +229,63 @@ func TestLoadSelectsProvidersAndPreservesCache(t *testing.T) {
 	}
 }
 
+func TestLoadConcurrent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache-conc"))
+	writeQuotaAuth(t, home)
+
+	grokBody := `{"config":{"creditUsagePercent":42,"billingPeriodEnd":"2026-08-28T00:00:00Z","productUsage":[]}}`
+	codexBody := `{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":7,"limit_window_seconds":604800,"reset_after_seconds":100,"reset_at":1}}}`
+	grokStarted := make(chan struct{})
+	codexStarted := make(chan struct{})
+	release := make(chan struct{})
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Host, "chatgpt.com") {
+			if strings.Contains(r.URL.Path, "reset-credits") {
+				<-release
+				return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+			}
+			codexStarted <- struct{}{}
+			<-release
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(codexBody)), Header: make(http.Header)}, nil
+		}
+		grokStarted <- struct{}{}
+		<-release
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(grokBody)), Header: make(http.Header)}, nil
+	})}
+
+	done := make(chan Report, 1)
+	go func() {
+		done <- Load(Options{Home: home, Client: client, TTL: time.Minute})
+	}()
+
+	timeout := time.After(3 * time.Second)
+	seenGrok, seenCodex := false, false
+	for !seenGrok || !seenCodex {
+		select {
+		case <-grokStarted:
+			seenGrok = true
+		case <-codexStarted:
+			seenCodex = true
+		case <-timeout:
+			t.Fatalf("both providers did not start; grok=%v codex=%v", seenGrok, seenCodex)
+		}
+	}
+	close(release)
+
+	select {
+	case r := <-done:
+		if !r.Grok.OK || r.Grok.Used == nil || *r.Grok.Used != 42 {
+			t.Fatalf("grok %#v", r.Grok)
+		}
+		if !r.Codex.OK || r.Codex.Plan != "plus" || r.Codex.Primary == nil || r.Codex.Primary.Used == nil || *r.Codex.Primary.Used != 7 {
+			t.Fatalf("codex %#v", r.Codex)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Load did not finish after release")
+	}
+}
+
 func TestClaudeWinLabelStripsControls(t *testing.T) {
 	got := claudeWinLabel("seven_day_\x1b]52;c;evil\x07_win\n")
 	if strings.ContainsRune(got, 0x1b) || strings.ContainsRune(got, 0x07) || strings.ContainsRune(got, '\n') {
