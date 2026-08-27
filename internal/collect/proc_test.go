@@ -7,6 +7,15 @@ import "testing"
 // 1. Build representative comm and cmdline pairs.
 // 2. Call classify for each pair.
 // 3. Expect the agent name or an empty string for non-agents.
+func TestNodeWraps(t *testing.T) {
+	if !nodeWraps("/usr/bin/node /home/u/.local/bin/claude", "claude") {
+		t.Fatal("bin path")
+	}
+	if nodeWraps("/usr/bin/node /home/u/.nvm/bin/grok", "claude") {
+		t.Fatal("other")
+	}
+}
+
 func TestClassify(t *testing.T) {
 	cases := []struct {
 		comm, cmd, want string
@@ -19,6 +28,8 @@ func TestClassify(t *testing.T) {
 		{"opencode", "opencode", "opencode"},
 		{"node", "/usr/bin/node /home/u/.nvm/bin/grok", ""},
 		{"node", "/usr/bin/node /home/u/.local/bin/claude", "claude"},
+		{"node", "/usr/bin/node /home/u/.local/bin/opencode", "opencode"},
+		{"node", "/usr/bin/node /home/u/.nvm/bin/opencode serve", "opencode"},
 		{"bash", "agent-usage", ""},
 		{"codex-code-mode", "/home/u/.codex/bin/codex-code-mode-host", ""},
 		{"MainThread", "/usr/local/bin/codex\x00exec\x00--json", "codex"},
@@ -139,6 +150,9 @@ func TestFormatElapsed(t *testing.T) {
 		t.Fatalf("got %s", g)
 	}
 	if g := formatElapsed(3661); g != "1:01:01" {
+		t.Fatalf("got %s", g)
+	}
+	if g := formatElapsed(2*86400 + 3600); g != "2d01h" {
 		t.Fatalf("got %s", g)
 	}
 }

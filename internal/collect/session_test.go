@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -565,5 +566,165 @@ func TestRecentCodexIdle(t *testing.T) {
 	got := recentCodexIdle(home, nil, 2*time.Hour, win)
 	if len(got) != 1 || got[0].Ctx != "50%" || got[0].Dir != "idleproj" {
 		t.Fatalf("got %#v", got)
+	}
+}
+
+// normalizeStatus maps vendor status strings onto busy/run/wait/idle.
+func TestNormalizeStatus(t *testing.T) {
+	cases := map[string]string{
+		"": "idle", "idle": "idle", "busy": "busy", "shell": "busy",
+		"working": "busy", "wait": "wait", "waiting": "wait",
+		"run": "run", "other": "run",
+	}
+	for in, want := range cases {
+		if g := normalizeStatus(in); g != want {
+			t.Fatalf("normalizeStatus(%q)=%q want %q", in, g, want)
+		}
+	}
+}
+
+// sessionFresh treats millisecond timestamps as recent within the window.
+func TestSessionFresh(t *testing.T) {
+	now := time.Now().UnixMilli()
+	if !sessionFresh(now, 2*time.Hour) {
+		t.Fatal("fresh ms")
+	}
+	if sessionFresh(now-int64(3*time.Hour/time.Millisecond), 2*time.Hour) {
+		t.Fatal("stale ms")
+	}
+	if sessionFresh(0, 2*time.Hour) {
+		t.Fatal("zero")
+	}
+	if !sessionFresh(time.Now().Unix(), 2*time.Hour) {
+		t.Fatal("fresh seconds")
+	}
+}
+
+// lastUsage looks past an 8KiB tail of non-usage events.
+func TestLastUsageRetriesLargerTail(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "s.jsonl")
+	var b strings.Builder
+	b.WriteString(`{"message":{"model":"claude-sonnet-5","usage":{"input_tokens":10,"cache_read_input_tokens":90,"cache_creation_input_tokens":0}}}` + "\n")
+	pad := `{"type":"system","content":"x"}` + "\n"
+	for b.Len() < 9000 {
+		b.WriteString(pad)
+	}
+	if err := os.WriteFile(p, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tok, model, ok := lastUsage(p)
+	if !ok || tok != 100 || model != "claude-sonnet-5" {
+		t.Fatalf("got %v %q %v", tok, model, ok)
+	}
+	if _, _, ok := lastUsageTail(p, 8192); ok {
+		t.Fatal("8KiB tail should miss usage")
+	}
+}
+
+// parseOpenCodeModel reads a slug or the id field of a JSON model object.
+func TestParseOpenCodeModel(t *testing.T) {
+	if g := parseOpenCodeModel(`{"id":"nemotron-3-ultra-free","providerID":"opencode"}`); g != "nemotron-3-ultra-free" {
+		t.Fatalf("json: %q", g)
+	}
+	if g := parseOpenCodeModel("gpt-4"); g != "gpt-4" {
+		t.Fatalf("slug: %q", g)
+	}
+	if g := parseOpenCodeModel(""); g != "" {
+		t.Fatalf("empty: %q", g)
+	}
+}
+
+const openCodeSchema = `CREATE TABLE session (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL DEFAULT '',
+  slug TEXT NOT NULL DEFAULT '',
+  directory TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  version TEXT NOT NULL DEFAULT '',
+  time_created INTEGER NOT NULL DEFAULT 0,
+  time_updated INTEGER NOT NULL DEFAULT 0,
+  time_archived INTEGER,
+  model TEXT,
+  tokens_input INTEGER NOT NULL DEFAULT 0,
+  tokens_cache_read INTEGER NOT NULL DEFAULT 0
+);
+`
+
+func writeOpenCodeFixture(t *testing.T, home, sql string) {
+	t.Helper()
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 not on PATH")
+	}
+	data := filepath.Join(home, "xdg")
+	t.Setenv("XDG_DATA_HOME", data)
+	dir := filepath.Join(data, "opencode")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "opencode.db")
+	cmd := exec.Command("sqlite3", db)
+	cmd.Stdin = strings.NewReader(sql)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("sqlite3: %v %s", err, out)
+	}
+}
+
+// enrichOpenCode fills title, model, and context-side tokens from one session row.
+func TestEnrichOpenCode(t *testing.T) {
+	home := t.TempDir()
+	writeOpenCodeFixture(t, home, openCodeSchema+`
+INSERT INTO session (id, directory, title, model, tokens_input, tokens_cache_read, time_updated)
+VALUES ('s1','/tmp/ocproj','hello','{"id":"nemotron-3-ultra-free"}',100,50,2000000000000);
+`)
+	s := Session{}
+	enrichOpenCode(&s, home, "/tmp/ocproj")
+	if s.Title != "hello" || s.Model != "nemotron-3-ultra-free" || s.Tokens == nil || *s.Tokens != 150 {
+		t.Fatalf("got %#v", s)
+	}
+}
+
+// recentOpenCodeIdle lists a recently updated unused session.
+func TestRecentOpenCodeIdle(t *testing.T) {
+	home := t.TempDir()
+	now := time.Now().UnixMilli()
+	writeOpenCodeFixture(t, home, openCodeSchema+
+		"INSERT INTO session (id, directory, title, model, tokens_input, tokens_cache_read, time_updated) VALUES ('s1','/tmp/ocidle','ok','m',20,5,"+strconv.FormatInt(now, 10)+");\n")
+	got := recentOpenCodeIdle(home, nil, 2*time.Hour)
+	if len(got) != 1 || got[0].Dir != "ocidle" || got[0].Model != "m" || got[0].Tokens == nil || *got[0].Tokens != 25 {
+		t.Fatalf("got %#v", got)
+	}
+}
+
+// claudeSessions includes a recent idle session whose pid is not a live claude.
+func TestClaudeRecentIdle(t *testing.T) {
+	home := t.TempDir()
+	cfg := filepath.Join(home, ".claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	dir := filepath.Join(cfg, "sessions")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"pid":2147483646,"sessionId":"sid-idle","cwd":"/tmp/clidle","status":"shell","name":"parked","updatedAt":%d}`, time.Now().UnixMilli())
+	if err := os.WriteFile(filepath.Join(dir, "2147483646.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := claudeSessions(home, nil, map[int]bool{}, true, 2*time.Hour)
+	if len(got) != 1 || got[0].Live || got[0].Status != "idle" || got[0].Dir != "clidle" || got[0].Title != "parked" {
+		t.Fatalf("got %#v", got)
+	}
+	if n := claudeSessions(home, nil, map[int]bool{}, false, 2*time.Hour); len(n) != 0 {
+		t.Fatalf("live-only %#v", n)
+	}
+}
+
+func TestWantAgent(t *testing.T) {
+	all := Options{}
+	if !all.want("claude") {
+		t.Fatal("empty agents means all")
+	}
+	one := Options{Agents: []string{"codex"}}
+	if one.want("claude") || !one.want("codex") {
+		t.Fatal("filter")
 	}
 }

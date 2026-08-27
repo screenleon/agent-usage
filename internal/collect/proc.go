@@ -32,8 +32,11 @@ func classify(comm, cmdline string) string {
 		return "grok"
 	}
 	if comm == "node" {
-		if strings.Contains(cmdline, "/bin/claude") || strings.HasSuffix(strings.TrimSpace(cmdline), "/claude") {
+		if nodeWraps(cmdline, "claude") {
 			return "claude"
+		}
+		if nodeWraps(cmdline, "opencode") {
+			return "opencode"
 		}
 	}
 	// comm can be a versioned binary; match the executable basename only.
@@ -46,6 +49,10 @@ func classify(comm, cmdline string) string {
 		return "opencode"
 	}
 	return ""
+}
+
+func nodeWraps(cmdline, name string) bool {
+	return strings.Contains(cmdline, "/bin/"+name) || strings.HasSuffix(strings.TrimSpace(cmdline), "/"+name)
 }
 
 func firstArgBase(cmdline string) string {
@@ -284,7 +291,7 @@ func formatElapsed(sec float64) string {
 	ss := s % 60
 	switch {
 	case d > 0:
-		return pad2(h) + ":" + pad2(m) + ":" + pad2(ss)
+		return strconv.Itoa(d) + "d" + pad2(h) + "h"
 	case h > 0:
 		return strconv.Itoa(h) + ":" + pad2(m) + ":" + pad2(ss)
 	default:

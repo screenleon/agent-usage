@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/screenleon/agent-usage/internal/collect"
+	"github.com/screenleon/agent-usage/internal/quota"
 )
 
 // sortSessions orders by status, then agent, then PID without mutating input.
@@ -21,6 +22,7 @@ func TestSortSessions(t *testing.T) {
 		{Status: "busy", Agent: "codex", PID: 9},
 		{Status: "busy", Agent: "claude", PID: 3},
 		{Status: "run", Agent: "claude", PID: 1},
+		{Status: "wait", Agent: "claude", PID: 4},
 		{Status: "busy", Agent: "claude", PID: 1},
 	}
 	origPID := make([]int, len(in))
@@ -28,7 +30,7 @@ func TestSortSessions(t *testing.T) {
 		origPID[i] = s.PID
 	}
 	got := sortSessions(in)
-	want := []string{"busy/claude/1", "busy/claude/3", "busy/codex/9", "run/claude/1", "idle/grok/2"}
+	want := []string{"busy/claude/1", "busy/claude/3", "busy/codex/9", "run/claude/1", "wait/claude/4", "idle/grok/2"}
 	if len(got) != len(want) {
 		t.Fatalf("len %d", len(got))
 	}
@@ -63,6 +65,9 @@ func TestSnapshotRendersCtxOrPlaceholder(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "21%") {
 		t.Fatalf("missing populated ctx:\n%s", out)
+	}
+	if !strings.Contains(out, "AGE") || !strings.Contains(out, "MODEL") {
+		t.Fatalf("missing AGE/MODEL columns:\n%s", out)
 	}
 	lines := strings.Split(out, "\n")
 	var data []string
@@ -116,5 +121,45 @@ func TestTruncTitle(t *testing.T) {
 	hostile := TruncTitle("/tmp/\x1b]52;c;evil\x07x", 40)
 	if strings.ContainsRune(hostile, 0x1b) || strings.ContainsRune(hostile, 0x07) {
 		t.Fatalf("control bytes remain: %q", hostile)
+	}
+}
+
+// Snapshot omits unselected quota agents that have no error.
+func TestSnapshotSkipsEmptyQuotaAgents(t *testing.T) {
+	var buf bytes.Buffer
+	q := quota.Report{Grok: quota.Grok{OK: true, Used: floatPtr(10), Remaining: floatPtr(90)}}
+	Snapshot(&buf, collect.Snapshot{Taken: time.Unix(0, 0).UTC()}, &q, 0)
+	out := buf.String()
+	if !strings.Contains(out, "  grok") || strings.Contains(out, "  claude") || strings.Contains(out, "  codex") {
+		t.Fatalf("got\n%s", out)
+	}
+}
+
+func floatPtr(v float64) *float64 { return &v }
+
+// Snapshot marks low remaining quota and uses human Codex names.
+func TestSnapshotQuotaLowWaterAndNames(t *testing.T) {
+	used := 90.0
+	rem := 10.0
+	var buf bytes.Buffer
+	q := quota.Report{
+		Claude: quota.Claude{OK: true, Used5h: &used, Used7d: &used},
+		Grok:   quota.Grok{OK: true, Used: &used, Remaining: &rem, Products: []quota.Product{{Name: "GrokBuild", Used: 88}}},
+		Codex: quota.Codex{
+			OK: true, Plan: "prolite",
+			Primary: &quota.Window{Used: &used, Remaining: &rem, WindowSeconds: 604800, ResetAfter: 100},
+			Extra: []quota.Extra{{
+				Name:    "gpt-reserve",
+				Primary: &quota.Window{Used: &used, Remaining: &rem, WindowSeconds: 604800, ResetAfter: 100},
+			}},
+			Resets: 1, ResetExpiry: time.Now().Add(3 * 24 * time.Hour).Unix(),
+		},
+	}
+	Snapshot(&buf, collect.Snapshot{Taken: time.Unix(0, 0).UTC()}, &q, 0)
+	out := buf.String()
+	for _, want := range []string{"Pro 5x", "Luna Reserve", "! 7d", "! week", "GrokBuild", "reset available"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
 	}
 }

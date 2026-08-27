@@ -15,10 +15,10 @@ import (
 func Snapshot(w io.Writer, snap collect.Snapshot, q *quota.Report, interval time.Duration) {
 	fmt.Fprintf(w, "agent-usage  %s\n\n", snap.Taken.Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(w, "SESSIONS\n")
-	fmt.Fprintf(w, "%-5s %-8s %-7s %6s %6s %5s %7s  %s\n",
-		"ST", "AGENT", "PID", "CPU", "MEM", "CTX", "TOKENS", "DIR / TITLE")
-	fmt.Fprintf(w, "%-5s %-8s %-7s %6s %6s %5s %7s  %s\n",
-		"--", "-----", "---", "---", "---", "---", "------", "----------")
+	fmt.Fprintf(w, "%-5s %-8s %-7s %7s %6s %6s %5s %7s %-16s  %s\n",
+		"ST", "AGENT", "PID", "AGE", "CPU", "MEM", "CTX", "TOKENS", "MODEL", "DIR / TITLE")
+	fmt.Fprintf(w, "%-5s %-8s %-7s %7s %6s %6s %5s %7s %-16s  %s\n",
+		"--", "-----", "---", "---", "---", "---", "---", "------", "-----", "----------")
 	if len(snap.Sessions) == 0 {
 		fmt.Fprintln(w, "(no live Claude / Grok / Codex / OpenCode session)")
 	} else {
@@ -27,6 +27,7 @@ func Snapshot(w io.Writer, snap collect.Snapshot, q *quota.Report, interval time
 			if s.PID > 0 {
 				pid = strconv.Itoa(s.PID)
 			}
+			age := dash(s.Elapsed)
 			cpu := "-"
 			if s.Live && s.CPU > 0 {
 				cpu = fmt.Sprintf("%.1f%%", s.CPU)
@@ -35,14 +36,12 @@ func Snapshot(w io.Writer, snap collect.Snapshot, q *quota.Report, interval time
 			if s.Live && s.RSSKB > 0 {
 				mem = fmtRSS(s.RSSKB)
 			}
-			ctx := s.Ctx
-			if ctx == "" {
-				ctx = "-"
-			}
+			ctx := dash(s.Ctx)
 			tok := "-"
 			if s.Tokens != nil {
 				tok = fmtTok(*s.Tokens)
 			}
+			model := dash(TruncTitle(s.Model, 16))
 			loc := collect.SanitizeDisplay(s.Dir)
 			if s.Title != "" && s.Title != s.Dir {
 				loc = loc + " · " + TruncTitle(s.Title, 40)
@@ -50,13 +49,20 @@ func Snapshot(w io.Writer, snap collect.Snapshot, q *quota.Report, interval time
 			if s.Kids > 0 {
 				loc += fmt.Sprintf(" +%d", s.Kids)
 			}
-			fmt.Fprintf(w, "%-5s %-8s %-7s %6s %6s %5s %7s  %s\n",
-				s.Status, s.Agent, pid, cpu, mem, ctx, tok, loc)
+			fmt.Fprintf(w, "%-5s %-8s %-7s %7s %6s %6s %5s %7s %-16s  %s\n",
+				s.Status, s.Agent, pid, age, cpu, mem, ctx, tok, model, loc)
 		}
 	}
 	if q != nil {
 		fmt.Fprintln(w)
-		fmt.Fprintln(w, "QUOTA")
+		fmt.Fprint(w, "QUOTA")
+		if !q.FetchedAt.IsZero() {
+			age := time.Since(q.FetchedAt).Truncate(time.Second)
+			if age >= time.Second {
+				fmt.Fprintf(w, "  (cached %s)", age)
+			}
+		}
+		fmt.Fprintln(w)
 		writeClaude(w, q.Claude)
 		writeGrok(w, q.Grok)
 		writeCodex(w, q.Codex)
@@ -67,10 +73,7 @@ func Snapshot(w io.Writer, snap collect.Snapshot, q *quota.Report, interval time
 }
 
 func writeClaude(w io.Writer, c quota.Claude) {
-	if !c.OK {
-		if c.Error != "" {
-			fmt.Fprintf(w, "  claude  %s\n", c.Error)
-		}
+	if skipQuota(w, "  claude  ", c.OK, c.Error) {
 		return
 	}
 	u5, r5 := pctPair(c.Used5h)
@@ -79,55 +82,130 @@ func writeClaude(w io.Writer, c quota.Claude) {
 	if c.Updated > 0 {
 		age = strconv.FormatInt((time.Now().Unix()-c.Updated)/60, 10) + "min ago"
 	}
-	fmt.Fprintf(w, "  claude  5h used %s remaining %s  reset %s  (%s)\n",
-		u5, r5, fmtUnixClock(c.Reset5h), age)
-	fmt.Fprintf(w, "          7d used %s remaining %s  reset %s\n", u7, r7, fmtUnixDateTime(c.Reset7d))
+	fmt.Fprintf(w, "  claude  %s5h used %s remaining %s  reset %s  (%s)\n",
+		warnUsed(c.Used5h), u5, r5, fmtUnixClock(c.Reset5h), age)
+	fmt.Fprintf(w, "          %s7d used %s remaining %s  reset %s\n", warnUsed(c.Used7d), u7, r7, fmtUnixDateTime(c.Reset7d))
+	for _, x := range c.Extra {
+		if x.Used == nil {
+			continue
+		}
+		ux, rx := pctPair(x.Used)
+		fmt.Fprintf(w, "          %s%s used %s remaining %s  reset %s\n",
+			warnUsed(x.Used), x.Name, ux, rx, fmtUnixDateTime(x.Reset))
+	}
 }
 
 func writeGrok(w io.Writer, g quota.Grok) {
-	if !g.OK {
-		fmt.Fprintf(w, "  grok    %s\n", or(g.Error, "unavailable"))
+	if skipQuota(w, "  grok    ", g.OK, g.Error) {
 		return
 	}
 	u, r := pctPair(g.Used)
 	end := g.End
-	if t, err := time.Parse(time.RFC3339Nano, g.End); err == nil {
-		end = t.Local().Format("01-02 15:04")
-	} else if t, err := time.Parse(time.RFC3339, g.End); err == nil {
+	if t, ok := quota.ParseTime(g.End); ok {
 		end = t.Local().Format("01-02 15:04")
 	}
-	fmt.Fprintf(w, "  grok    week used %s remaining %s  reset %s\n", u, r, end)
+	top := ""
+	if len(g.Products) > 0 {
+		best := g.Products[0]
+		for _, p := range g.Products[1:] {
+			if p.Used > best.Used {
+				best = p
+			}
+		}
+		top = "  (" + best.Name + " " + fmtPct(best.Used) + ")"
+	}
+	fmt.Fprintf(w, "  grok    %sweek used %s remaining %s  reset %s%s\n", warnUsed(g.Used), u, r, end, top)
 	for _, p := range g.Products {
-		fmt.Fprintf(w, "          %s %s used\n", p.Name, fmtPct(p.Used))
+		rem := quota.Remaining(p.Used)
+		fmt.Fprintf(w, "          %s%s %s used remaining %s\n", warnRem(rem), p.Name, fmtPct(p.Used), fmtPct(rem))
 	}
 }
 
 func writeCodex(w io.Writer, c quota.Codex) {
-	if !c.OK {
-		fmt.Fprintf(w, "  codex   %s\n", or(c.Error, "unavailable"))
+	if skipQuota(w, "  codex   ", c.OK, c.Error) {
 		return
 	}
-	plan := c.Plan
-	if plan == "" {
-		plan = "?"
+	plan := quota.PlanName(c.Plan)
+	main := c.Primary
+	if !winOK(main) {
+		main = c.Secondary
 	}
-	if c.Primary == nil || c.Primary.Used == nil {
+	if !winOK(main) {
 		fmt.Fprintf(w, "  codex   %-7s (no window)\n", plan)
+	} else {
+		writeWin(w, "  codex   "+fmt.Sprintf("%-7s ", plan), main)
+		if main == c.Primary {
+			writeWin(w, "          ", c.Secondary)
+		}
+	}
+	for _, ex := range c.Extra {
+		name := quota.LimitName(ex.Name)
+		writeWin(w, fmt.Sprintf("          %-16s ", name), ex.Primary)
+		writeWin(w, "                   ", ex.Secondary)
+	}
+	if c.Resets > 0 {
+		exp := fmtDurUnix(c.ResetExpiry)
+		if exp == "-" {
+			fmt.Fprintf(w, "          %d reset available\n", c.Resets)
+		} else {
+			fmt.Fprintf(w, "          %d reset available · expires %s\n", c.Resets, exp)
+		}
+	}
+}
+
+func skipQuota(w io.Writer, prefix string, ok bool, err string) bool {
+	if ok {
+		return false
+	}
+	if err != "" {
+		fmt.Fprintf(w, "%s%s\n", prefix, err)
+	}
+	return true
+}
+
+func writeWin(w io.Writer, prefix string, win *quota.Window) {
+	if !winOK(win) {
 		return
 	}
-	fmt.Fprintf(w, "  codex   %-7s %s used %s remaining %s  reset in %s\n",
-		plan, winLabel(c.Primary.WindowSeconds),
-		fmtPct(*c.Primary.Used), fmtPct(*c.Primary.Remaining),
-		fmtDur(c.Primary.ResetAfter))
-	for _, ex := range c.Extra {
-		if ex.Primary == nil || ex.Primary.Used == nil {
-			continue
-		}
-		fmt.Fprintf(w, "          %-16s %s used %s remaining %s  reset in %s\n",
-			ex.Name, winLabel(ex.Primary.WindowSeconds),
-			fmtPct(*ex.Primary.Used), fmtPct(*ex.Primary.Remaining),
-			fmtDur(ex.Primary.ResetAfter))
+	fmt.Fprintf(w, "%s%s%s used %s remaining %s  reset in %s\n",
+		prefix, warnRem(*win.Remaining), winLabel(win.WindowSeconds),
+		fmtPct(*win.Used), fmtPct(*win.Remaining), fmtDur(win.ResetAfter))
+}
+
+func winOK(w *quota.Window) bool {
+	return w != nil && w.Used != nil && w.Remaining != nil
+}
+
+func warnUsed(used *float64) string {
+	if used == nil {
+		return ""
 	}
+	return warnRem(quota.Remaining(*used))
+}
+
+func warnRem(rem float64) string {
+	if rem < quota.LowWater {
+		return "! "
+	}
+	return ""
+}
+
+func dash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+func fmtDurUnix(ts int64) string {
+	if ts <= 0 {
+		return "-"
+	}
+	d := time.Until(time.Unix(ts, 0))
+	if d < 0 {
+		return "-"
+	}
+	return fmtDur(int64(d.Seconds()))
 }
 
 func pctPair(used *float64) (string, string) {
@@ -210,16 +288,9 @@ func winLabel(sec int64) string {
 	}
 }
 
-func or(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
-}
-
 func sortSessions(in []collect.Session) []collect.Session {
 	out := append([]collect.Session(nil), in...)
-	rank := map[string]int{"busy": 0, "run": 1, "idle": 2}
+	rank := map[string]int{"busy": 0, "run": 1, "wait": 2, "idle": 3}
 	sort.Slice(out, func(i, j int) bool {
 		ri, rj := rank[out[i].Status], rank[out[j].Status]
 		if ri != rj {

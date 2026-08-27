@@ -69,4 +69,93 @@ func TestGrokToken(t *testing.T) {
 	if g := grokToken(home); g != "tok-1" {
 		t.Fatalf("got %q", g)
 	}
+	if _, stale := grokAuth(home); stale {
+		t.Fatal("missing expires_at should not be stale")
+	}
+}
+
+// grokAuth reports stale when expires_at is in the past.
+func TestGrokAuthExpired(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".grok")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"https://auth.x.ai::abc":{"key":"tok-1","expires_at":"2000-01-01T00:00:00Z"}}`
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tok, stale := grokAuth(home)
+	if tok != "tok-1" || !stale {
+		t.Fatalf("tok=%q stale=%v", tok, stale)
+	}
+}
+
+// readClaude keeps extra windows besides five_hour and seven_day.
+func TestReadClaudeExtraWindows(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"updated_at":100,"five_hour":{"used_percentage":17,"resets_at":200},"seven_day":{"used_percentage":14,"resets_at":300},"seven_day_sonnet":{"used_percentage":40,"resets_at":400}}`
+	if err := os.WriteFile(filepath.Join(dir, "rate-limits.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := readClaude(home)
+	if !c.OK || c.Used5h == nil || *c.Used5h != 17 || len(c.Extra) != 1 || c.Extra[0].Name != "7d sonnet" || c.Extra[0].Used == nil || *c.Extra[0].Used != 40 {
+		t.Fatalf("got %#v", c)
+	}
+}
+
+func TestParseTime(t *testing.T) {
+	t1, ok := ParseTime("2026-08-28T17:11:41.327003+00:00")
+	if !ok || t1.Year() != 2026 {
+		t.Fatalf("nano %v %v", t1, ok)
+	}
+	t2, ok := ParseTime("2026-08-28T17:11:41Z")
+	if !ok || t2.Year() != 2026 {
+		t.Fatalf("rfc3339 %v %v", t2, ok)
+	}
+	if _, ok := ParseTime("not-a-time"); ok {
+		t.Fatal("bad")
+	}
+}
+
+func TestPlanAndLimitNames(t *testing.T) {
+	if PlanName("prolite") != "Pro 5x" || PlanName("pro") != "Pro" {
+		t.Fatal(PlanName("prolite"))
+	}
+	if LimitName("gpt-reserve") != "Luna Reserve" {
+		t.Fatal(LimitName("gpt-reserve"))
+	}
+}
+
+func TestMinRemaining(t *testing.T) {
+	u := 90.0
+	r := Remaining(u)
+	rep := Report{
+		Claude: Claude{OK: true, Used5h: &u},
+		Grok:   Grok{OK: true, Remaining: &r},
+	}
+	min, ok := rep.MinRemaining(nil)
+	if !ok || min != 10 {
+		t.Fatalf("min=%v ok=%v", min, ok)
+	}
+	min, ok = rep.MinRemaining([]string{"grok"})
+	if !ok || min != 10 {
+		t.Fatalf("grok min=%v", min)
+	}
+	if _, ok := rep.MinRemaining([]string{"codex"}); ok {
+		t.Fatal("codex has no windows")
+	}
+}
+
+func TestForAgents(t *testing.T) {
+	u := 1.0
+	rep := Report{Claude: Claude{OK: true, Used5h: &u}, Grok: Grok{OK: true}}
+	got := rep.ForAgents([]string{"claude"})
+	if !got.Claude.OK || got.Grok.OK {
+		t.Fatalf("got %#v", got)
+	}
 }
