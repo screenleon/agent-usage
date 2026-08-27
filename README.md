@@ -22,7 +22,7 @@ agent-usage --recent
 | --- | --- | --- |
 | Processes | `/proc/<pid>/{comm,cmdline,cwd,stat,children}` | only pids whose `comm` is claude / grok / codex / opencode |
 | Claude sessions | `~/.claude/sessions/<pid>.json` | skip if that pid is not a live `claude` |
-| Claude tokens / CTX | last **8KiB** of the matching project jsonl ÷ 200k (or 1M if the model name contains `1m`) | no full history walk |
+| Claude tokens / CTX | last **8KiB** of the matching project jsonl (then **32KiB** / **64KiB** if that tail has no usage) ÷ 200k (or 1M if the model name contains `1m`) | no full history walk |
 | Codex tokens / CTX | `state_5.sqlite` `tokens_used` ÷ `models_cache.json` `context_window` (× effective %) | one cache file + one SQL row |
 | Grok sessions | `~/.grok/active_sessions.json`, `signals.json`, `summary.json` | never opens `updates.jsonl` |
 | Codex recent | `sqlite3 -readonly` on `~/.codex/state_5.sqlite` | only with `--recent` or a live `codex` process |

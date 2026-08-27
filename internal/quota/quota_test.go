@@ -286,6 +286,29 @@ func TestLoadConcurrent(t *testing.T) {
 	}
 }
 
+func TestFillCodexResetsSelectsEarliestActive(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache-resets"))
+	writeQuotaAuth(t, home)
+	usageBody := `{"plan_type":"prolite","rate_limit":{"primary_window":{"used_percent":1,"limit_window_seconds":604800,"reset_after_seconds":100,"reset_at":1}}}`
+	resetBody := `{"available_count":2,"credits":[{"status":"expired","expires_at":"2026-01-01T00:00:00Z"},{"status":"active","expires_at":"2026-09-10T00:00:00Z"},{"status":"available","expires_at":"2026-09-01T00:00:00Z"},{"status":"used","expires_at":"2026-08-01T00:00:00Z"}]}`
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := usageBody
+		if strings.Contains(r.URL.Path, "reset-credits") {
+			body = resetBody
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	r := Load(Options{Home: home, Client: client, Agents: []string{"codex"}, TTL: time.Minute})
+	if !r.Codex.OK || r.Codex.Resets != 2 {
+		t.Fatalf("resets %#v", r.Codex)
+	}
+	want := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).Unix()
+	if r.Codex.ResetExpiry != want {
+		t.Fatalf("expiry %d want %d", r.Codex.ResetExpiry, want)
+	}
+}
+
 func TestClaudeWinLabelStripsControls(t *testing.T) {
 	got := claudeWinLabel("seven_day_\x1b]52;c;evil\x07_win\n")
 	if strings.ContainsRune(got, 0x1b) || strings.ContainsRune(got, 0x07) || strings.ContainsRune(got, '\n') {
