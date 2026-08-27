@@ -11,6 +11,9 @@ agent-usage watch     # refresh every 2s
 agent-usage watch 1
 agent-usage --offline
 agent-usage --json
+agent-usage --agent claude,codex
+agent-usage --fail-under 15
+agent-usage --recent
 ```
 
 ## What it reads
@@ -19,13 +22,14 @@ agent-usage --json
 | --- | --- | --- |
 | Processes | `/proc/<pid>/{comm,cmdline,cwd,stat,children}` | only pids whose `comm` is claude / grok / codex / opencode |
 | Claude sessions | `~/.claude/sessions/<pid>.json` | skip if that pid is not a live `claude` |
-| Claude tokens / CTX | last **8KiB** of the matching project jsonl ÷ 200k (or 1M if the model name contains `1m`) | no full history walk |
+| Claude tokens / CTX | last **8KiB** of the matching project jsonl (then **32KiB** / **64KiB** if that tail has no usage) ÷ 200k (or 1M if the model name contains `1m`) | no full history walk |
 | Codex tokens / CTX | `state_5.sqlite` `tokens_used` ÷ `models_cache.json` `context_window` (× effective %) | one cache file + one SQL row |
 | Grok sessions | `~/.grok/active_sessions.json`, `signals.json`, `summary.json` | never opens `updates.jsonl` |
 | Codex recent | `sqlite3 -readonly` on `~/.codex/state_5.sqlite` | only with `--recent` or a live `codex` process |
-| Claude quota | `~/.claude/rate-limits.json` | written by the existing StatusLine hook |
+| OpenCode tokens | `~/.local/share/opencode/opencode.db` `session` row | one SQL row; never walks `message` / `part` |
+| Claude quota | `~/.claude/rate-limits.json` | written by the existing StatusLine hook; extra windows listed if present |
 | Grok remaining | `GET …/v1/billing?format=credits` | cached 60s under `~/.cache/agent-usage/` |
-| Codex remaining | `GET …/wham/usage` | same 60s cache |
+| Codex remaining | `GET …/wham/usage` (and reset credits) | same 60s cache |
 
 Quota HTTP uses the tokens already stored in `~/.grok/auth.json` and `~/.codex/auth.json`. Those files are never printed or copied. A Grok **401** means the stored access token is stale: start `grok` once so the CLI can refresh it. That is not a prompt to run `grok login` unless refresh itself fails.
 

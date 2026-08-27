@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/screenleon/agent-usage/internal/filter"
 )
 
 type Session struct {
@@ -20,6 +22,7 @@ type Session struct {
 	Elapsed string   `json:"elapsed,omitempty"`
 	Ctx     string   `json:"ctx,omitempty"`
 	Tokens  *float64 `json:"tokens,omitempty"`
+	Model   string   `json:"model,omitempty"`
 	Kids    int      `json:"kids,omitempty"`
 	Dir     string   `json:"dir"`
 	Title   string   `json:"title,omitempty"`
@@ -34,6 +37,11 @@ type Options struct {
 	Home      string
 	Recent    bool
 	RecentFor time.Duration
+	Agents    []string
+}
+
+func (o Options) want(agent string) bool {
+	return filter.Wants(o.Agents, agent)
 }
 
 func Collect(opt Options) Snapshot {
@@ -48,10 +56,14 @@ func Collect(opt Options) Snapshot {
 	var rows []Session
 
 	used := map[int]bool{}
-	rows = append(rows, claudeSessions(opt.Home, procs, used)...)
-	rows = append(rows, grokSessions(opt.Home, procs, used, opt.Recent)...)
+	if opt.want("claude") {
+		rows = append(rows, claudeSessions(opt.Home, procs, used, opt.Recent, opt.RecentFor)...)
+	}
+	if opt.want("grok") {
+		rows = append(rows, grokSessions(opt.Home, procs, used, opt.Recent)...)
+	}
 	for pid, p := range procs {
-		if used[pid] {
+		if used[pid] || !opt.want(p.Agent) {
 			continue
 		}
 		s := leftoverSession(p, opt.Home, codexWin)
@@ -59,7 +71,12 @@ func Collect(opt Options) Snapshot {
 		used[pid] = true
 	}
 	if opt.Recent {
-		rows = append(rows, recentCodexIdle(opt.Home, rows, opt.RecentFor, codexWin)...)
+		if opt.want("codex") {
+			rows = append(rows, recentCodexIdle(opt.Home, rows, opt.RecentFor, codexWin)...)
+		}
+		if opt.want("opencode") {
+			rows = append(rows, recentOpenCodeIdle(opt.Home, rows, opt.RecentFor)...)
+		}
 	}
 	return Snapshot{Taken: time.Now(), Sessions: rows}
 }
@@ -70,15 +87,19 @@ func leftoverSession(p Proc, home string, windows map[string]int64) Session {
 	if src == "" {
 		src = p.Cmd
 	}
-	if p.Agent == "codex" && isCodexExec(src) {
+	exec := p.Agent == "codex" && isCodexExec(src)
+	if exec {
 		st = "busy"
 	}
 	s := sessionFromProc(p, st)
-	if p.Agent == "codex" {
+	switch p.Agent {
+	case "codex":
 		enrichCodex(&s, home, p.CWD, src, windows)
-		if s.Title == "" && isCodexExec(src) {
+		if s.Title == "" && exec {
 			s.Title = "exec"
 		}
+	case "opencode":
+		enrichOpenCode(&s, home, p.CWD)
 	}
 	return s
 }
@@ -127,7 +148,7 @@ func isExecToken(a string) bool {
 func sessionFromProc(p Proc, st string) Session {
 	return Session{
 		Live:    true,
-		Status:  st,
+		Status:  normalizeStatus(st),
 		Agent:   p.Agent,
 		PID:     p.PID,
 		CPU:     p.CPU,
@@ -138,22 +159,35 @@ func sessionFromProc(p Proc, st string) Session {
 	}
 }
 
-func claudeSessions(home string, procs map[int]Proc, used map[int]bool) []Session {
+func normalizeStatus(st string) string {
+	switch strings.ToLower(strings.TrimSpace(st)) {
+	case "busy", "shell", "working":
+		return "busy"
+	case "wait", "waiting":
+		return "wait"
+	case "idle", "":
+		return "idle"
+	case "run":
+		return "run"
+	default:
+		return "run"
+	}
+}
+
+func claudeSessions(home string, procs map[int]Proc, used map[int]bool, recent bool, recentFor time.Duration) []Session {
 	dir := filepath.Join(claudeHome(home), "sessions")
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
 	var out []Session
+	idleN := 0
 	for _, e := range ents {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
 		pid, err := strconv.Atoi(strings.TrimSuffix(e.Name(), ".json"))
 		if err != nil {
-			continue
-		}
-		if !pidAliveAgent(pid, "claude") {
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
@@ -164,22 +198,31 @@ func claudeSessions(home string, procs map[int]Proc, used map[int]bool) []Sessio
 		if json.Unmarshal(raw, &meta) != nil {
 			continue
 		}
-		if meta.PID != 0 && meta.PID != pid {
+		if meta.PID != 0 {
 			pid = meta.PID
-			if !pidAliveAgent(pid, "claude") {
+		}
+		live := pidAliveAgent(pid, "claude")
+		if !live {
+			if !recent || idleN >= 8 || !sessionFresh(meta.UpdatedAt, recentFor) {
 				continue
 			}
 		}
-		p := procs[pid]
 		st := meta.Status
 		if st == "" {
 			st = "idle"
 		}
-		s := sessionFromProc(p, st)
-		if s.PID == 0 {
-			s.PID = pid
-			s.Agent = "claude"
-			s.Live = true
+		var s Session
+		if live {
+			s = sessionFromProc(procs[pid], st)
+			if s.PID == 0 {
+				s.PID = pid
+				s.Agent = "claude"
+				s.Live = true
+			}
+			used[pid] = true
+		} else {
+			s = Session{Live: false, Status: "idle", Agent: "claude"}
+			idleN++
 		}
 		if meta.CWD != "" {
 			s.Dir = shortPath(meta.CWD)
@@ -188,9 +231,9 @@ func claudeSessions(home string, procs map[int]Proc, used map[int]bool) []Sessio
 		if tok, model, ok := claudeTail(home, meta.SessionID); ok {
 			s.Tokens = &tok
 			s.Ctx = ctxPct(tok, claudeWindow(model))
+			s.Model = model
 		}
 		out = append(out, s)
-		used[pid] = true
 	}
 	return out
 }
@@ -201,6 +244,21 @@ type claudeSessionFile struct {
 	CWD       string `json:"cwd"`
 	Status    string `json:"status"`
 	Name      string `json:"name"`
+	UpdatedAt int64  `json:"updatedAt"`
+}
+
+func sessionFresh(ts int64, window time.Duration) bool {
+	if ts <= 0 || window <= 0 {
+		return false
+	}
+	return time.Since(time.Unix(unixSec(ts), 0)) <= window
+}
+
+func unixSec(ts int64) int64 {
+	if ts > 1e12 {
+		return ts / 1000
+	}
+	return ts
 }
 
 func claudeHome(home string) string {
@@ -245,6 +303,17 @@ func lastUsageTokens(path string) *float64 {
 }
 
 func lastUsage(path string) (tokens float64, model string, ok bool) {
+	// Context-side tokens only (input + cache). Do not scan the whole jsonl:
+	// try 8KiB, then 32KiB, then 64KiB if the tail is trailing events without usage.
+	for _, tail := range []int64{8192, 32768, 65536} {
+		if tok, model, ok := lastUsageTail(path, tail); ok {
+			return tok, model, true
+		}
+	}
+	return 0, "", false
+}
+
+func lastUsageTail(path string, tail int64) (tokens float64, model string, ok bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, "", false
@@ -254,7 +323,6 @@ func lastUsage(path string) (tokens float64, model string, ok bool) {
 	if err != nil {
 		return 0, "", false
 	}
-	const tail = 8192
 	start := st.Size() - tail
 	if start < 0 {
 		start = 0
@@ -372,9 +440,6 @@ func grokSessions(home string, procs map[int]Proc, used map[int]bool, recent boo
 		p := procs[it.PID]
 		if live {
 			st = "run"
-			if p.CPU >= 3 {
-				st = "busy"
-			}
 			for _, c := range childCmdlines(it.PID) {
 				if strings.Contains(c, "turn in progress") {
 					st = "busy"
@@ -388,21 +453,21 @@ func grokSessions(home string, procs map[int]Proc, used map[int]bool, recent boo
 			s.PID = it.PID
 			s.Agent = "grok"
 		}
+		if !live {
+			s.PID = 0
+			s.CPU = 0
+			s.RSSKB = 0
+			s.Elapsed = ""
+			s.Kids = 0
+		}
 		if it.CWD != "" {
 			s.Dir = shortPath(it.CWD)
 		}
 		if dir := grokSessionDir(home, it.CWD, it.SessionID); dir != "" {
-			if sig := readGrokSignals(dir); sig != nil {
-				if sig.ContextTokensUsed > 0 {
-					t := float64(sig.ContextTokensUsed)
-					s.Tokens = &t
-				}
-				if sig.ContextWindowUsage != 0 {
-					s.Ctx = strconv.Itoa(sig.ContextWindowUsage) + "%"
-				}
-			}
+			applyGrokSignals(&s, readGrokSignals(dir))
 			if sm := readGrokSummary(dir); sm != nil {
 				s.Title = firstNonEmpty(sm.GeneratedTitle, sm.SessionSummary)
+				s.Model = firstNonEmpty(s.Model, sm.CurrentModelID)
 			}
 		}
 		out = append(out, s)
@@ -431,17 +496,32 @@ func grokSessionDir(home, cwd, sid string) string {
 }
 
 type grokSignals struct {
-	ContextWindowUsage int   `json:"contextWindowUsage"`
-	ContextTokensUsed  int64 `json:"contextTokensUsed"`
+	ContextWindowUsage  int    `json:"contextWindowUsage"`
+	ContextTokensUsed   int64  `json:"contextTokensUsed"`
+	ContextWindowTokens int64  `json:"contextWindowTokens"`
+	PrimaryModelID      string `json:"primaryModelId"`
+}
+
+func applyGrokSignals(s *Session, sig *grokSignals) {
+	if sig == nil {
+		return
+	}
+	if sig.ContextTokensUsed > 0 {
+		t := float64(sig.ContextTokensUsed)
+		s.Tokens = &t
+		if sig.ContextWindowTokens > 0 {
+			s.Ctx = ctxPct(t, sig.ContextWindowTokens)
+		}
+	}
+	if s.Ctx == "" && sig.ContextWindowUsage != 0 {
+		s.Ctx = strconv.Itoa(sig.ContextWindowUsage) + "%"
+	}
+	s.Model = sig.PrimaryModelID
 }
 
 func readGrokSignals(dir string) *grokSignals {
-	b, err := os.ReadFile(filepath.Join(dir, "signals.json"))
-	if err != nil {
-		return nil
-	}
 	var s grokSignals
-	if json.Unmarshal(b, &s) != nil {
+	if !readJSON(filepath.Join(dir, "signals.json"), &s) {
 		return nil
 	}
 	return &s
@@ -450,32 +530,34 @@ func readGrokSignals(dir string) *grokSignals {
 type grokSummary struct {
 	GeneratedTitle string `json:"generated_title"`
 	SessionSummary string `json:"session_summary"`
+	CurrentModelID string `json:"current_model_id"`
 }
 
 func readGrokSummary(dir string) *grokSummary {
-	b, err := os.ReadFile(filepath.Join(dir, "summary.json"))
-	if err != nil {
-		return nil
-	}
 	var s grokSummary
-	if json.Unmarshal(b, &s) != nil {
+	if !readJSON(filepath.Join(dir, "summary.json"), &s) {
 		return nil
 	}
 	return &s
+}
+
+func readJSON(path string, v any) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return json.Unmarshal(b, v) == nil
 }
 
 func enrichCodex(s *Session, home, cwd, cmd string, windows map[string]int64) {
 	rows := querySQLiteMaps(filepath.Join(home, ".codex", "state_5.sqlite"),
 		`SELECT tokens_used, title, IFNULL(model,'') AS model FROM threads WHERE archived=0 AND cwd=? ORDER BY updated_at DESC LIMIT 1`,
 		cwd)
-	model := flagValue(cmd, "-m")
-	if model == "" {
-		model = flagValue(cmd, "--model")
-	}
+	model := firstFlagValue(cmd, "-m", "--model")
 	if len(rows) > 0 {
 		row := rows[0]
-		if t, err := strconv.ParseFloat(row["tokens_used"], 64); err == nil {
-			s.Tokens = &t
+		if t := parseTok(row["tokens_used"]); t != nil {
+			s.Tokens = t
 		}
 		if row["model"] != "" {
 			model = row["model"]
@@ -484,18 +566,16 @@ func enrichCodex(s *Session, home, cwd, cmd string, windows map[string]int64) {
 			s.Title = t
 		}
 	}
+	if model != "" {
+		s.Model = model
+	}
 	if s.Tokens != nil {
 		s.Ctx = ctxPct(*s.Tokens, codexWindow(model, windows))
 	}
 }
 
 func recentCodexIdle(home string, existing []Session, window time.Duration, windows map[string]int64) []Session {
-	seen := map[string]bool{}
-	for _, r := range existing {
-		if r.Agent == "codex" && r.Live {
-			seen[r.Dir] = true
-		}
-	}
+	seen := seenDirs(existing, "codex", true)
 	cutoff := time.Now().Add(-window).Unix()
 	rows := querySQLiteMaps(filepath.Join(home, ".codex", "state_5.sqlite"),
 		`SELECT tokens_used, title, cwd, IFNULL(model,'') AS model FROM threads WHERE archived=0 AND updated_at>=? ORDER BY updated_at DESC LIMIT 8`,
@@ -506,15 +586,43 @@ func recentCodexIdle(home string, existing []Session, window time.Duration, wind
 		if dir == "?" || seen[dir] {
 			continue
 		}
-		s := Session{Live: false, Status: "idle", Agent: "codex", Dir: dir, Title: tidyTitle(row["title"])}
-		if t, err := strconv.ParseFloat(row["tokens_used"], 64); err == nil {
-			s.Tokens = &t
-			s.Ctx = ctxPct(t, codexWindow(row["model"], windows))
+		s := idleSession("codex", dir)
+		s.Title = tidyTitle(row["title"])
+		s.Model = row["model"]
+		if t := parseTok(row["tokens_used"]); t != nil {
+			s.Tokens = t
+			s.Ctx = ctxPct(*t, codexWindow(row["model"], windows))
 		}
 		out = append(out, s)
 		seen[dir] = true
 	}
 	return out
+}
+
+func seenDirs(existing []Session, agent string, liveOnly bool) map[string]bool {
+	seen := map[string]bool{}
+	for _, r := range existing {
+		if r.Agent != agent {
+			continue
+		}
+		if liveOnly && !r.Live {
+			continue
+		}
+		seen[r.Dir] = true
+	}
+	return seen
+}
+
+func idleSession(agent, dir string) Session {
+	return Session{Live: false, Status: "idle", Agent: agent, Dir: dir}
+}
+
+func parseTok(s string) *float64 {
+	t, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return nil
+	}
+	return &t
 }
 
 func shortPath(p string) string {
