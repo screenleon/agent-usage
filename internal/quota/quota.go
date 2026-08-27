@@ -104,29 +104,36 @@ func Load(opt Options) Report {
 	if !needGrok && !needCodex {
 		return rep
 	}
-	if cached, ok := readCache(opt.Home, opt.TTL); ok {
-		if needGrok {
+	cached, hasCache := readCache(opt.Home, opt.TTL)
+	fetchGrokNeed := needGrok
+	fetchCodexNeed := needCodex
+	if hasCache {
+		if needGrok && cached.Grok.OK {
 			rep.Grok = cached.Grok
+			fetchGrokNeed = false
 		}
-		if needCodex {
+		if needCodex && cached.Codex.OK {
 			rep.Codex = cached.Codex
+			fetchCodexNeed = false
 		}
-		rep.FetchedAt = cached.FetchedAt
-		return rep
+		if !fetchGrokNeed && !fetchCodexNeed {
+			rep.FetchedAt = cached.FetchedAt
+			return rep
+		}
 	}
 	var (
 		g  Grok
 		c  Codex
 		wg sync.WaitGroup
 	)
-	if needGrok {
+	if fetchGrokNeed {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			g = fetchGrok(opt)
 		}()
 	}
-	if needCodex {
+	if fetchCodexNeed {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -134,13 +141,13 @@ func Load(opt Options) Report {
 		}()
 	}
 	wg.Wait()
-	if needGrok {
+	if fetchGrokNeed {
 		rep.Grok = g
 	}
-	if needCodex {
+	if fetchCodexNeed {
 		rep.Codex = c
 	}
-	writeCacheMerge(opt.Home, rep, needGrok, needCodex)
+	writeCacheMerge(opt.Home, rep, fetchGrokNeed, fetchCodexNeed)
 	return rep
 }
 
@@ -201,7 +208,22 @@ func claudeWindowFrom(raw json.RawMessage) ClaudeWin {
 func claudeWinLabel(k string) string {
 	k = strings.ReplaceAll(k, "seven_day", "7d")
 	k = strings.ReplaceAll(k, "five_hour", "5h")
-	return strings.ReplaceAll(k, "_", " ")
+	k = strings.ReplaceAll(k, "_", " ")
+	return sanitizeLabel(k)
+}
+
+func sanitizeLabel(s string) string {
+	if s == "" {
+		return s
+	}
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return string(out)
 }
 
 func fetchGrok(opt Options) Grok {

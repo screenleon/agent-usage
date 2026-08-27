@@ -1,9 +1,13 @@
 package quota
 
 import (
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // readClaude loads five-hour and seven-day used percentages from rate-limits.json.
@@ -148,6 +152,90 @@ func TestMinRemaining(t *testing.T) {
 	}
 	if _, ok := rep.MinRemaining([]string{"codex"}); ok {
 		t.Fatal("codex has no windows")
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func writeQuotaAuth(t *testing.T, home string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(home, ".grok"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".grok", "auth.json"),
+		[]byte(`{"https://auth.x.ai::x":{"key":"g-tok"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"),
+		[]byte(`{"tokens":{"access_token":"c-tok","account_id":"acc"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadSelectsProvidersAndPreservesCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	writeQuotaAuth(t, home)
+
+	grokBody := `{"config":{"creditUsagePercent":10,"billingPeriodEnd":"2026-08-28T00:00:00Z","productUsage":[]}}`
+	codexBody := `{"plan_type":"prolite","rate_limit":{"primary_window":{"used_percent":5,"limit_window_seconds":604800,"reset_after_seconds":100,"reset_at":1}}}`
+	var calls []string
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls = append(calls, r.URL.Host+r.URL.Path)
+		body := grokBody
+		if strings.Contains(r.URL.Host, "chatgpt.com") {
+			if strings.Contains(r.URL.Path, "reset-credits") {
+				return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+			}
+			body = codexBody
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+
+	opt := func(agents []string) Options {
+		return Options{Home: home, Client: client, Agents: agents, TTL: time.Minute}
+	}
+
+	r := Load(opt([]string{"grok"}))
+	if !r.Grok.OK || r.Codex.OK || r.Grok.Used == nil || *r.Grok.Used != 10 {
+		t.Fatalf("grok-only %#v", r)
+	}
+	if len(calls) != 1 || !strings.Contains(calls[0], "cli-chat-proxy.grok.com") {
+		t.Fatalf("grok calls %v", calls)
+	}
+
+	calls = nil
+	r = Load(opt([]string{"grok"}))
+	if len(calls) != 0 || !r.Grok.OK {
+		t.Fatalf("fresh cache refetch %v %#v", calls, r)
+	}
+
+	calls = nil
+	r = Load(opt([]string{"codex"}))
+	if !r.Codex.OK || r.Grok.OK || r.Codex.Plan != "prolite" {
+		t.Fatalf("codex-only %#v", r)
+	}
+	if len(calls) != 2 { // usage + reset-credits
+		t.Fatalf("codex calls %v", calls)
+	}
+	cached, ok := readCacheFile(home)
+	if !ok || !cached.Grok.OK || !cached.Codex.OK || cached.Grok.Used == nil || *cached.Grok.Used != 10 {
+		t.Fatalf("preserved cache %#v", cached)
+	}
+}
+
+func TestClaudeWinLabelStripsControls(t *testing.T) {
+	got := claudeWinLabel("seven_day_\x1b]52;c;evil\x07_win\n")
+	if strings.ContainsRune(got, 0x1b) || strings.ContainsRune(got, 0x07) || strings.ContainsRune(got, '\n') {
+		t.Fatalf("controls remain %q", got)
+	}
+	if !strings.Contains(got, "7d") {
+		t.Fatalf("label %q", got)
 	}
 }
 

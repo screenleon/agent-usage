@@ -163,3 +163,19 @@ func TestSnapshotQuotaLowWaterAndNames(t *testing.T) {
 		}
 	}
 }
+
+func TestSnapshotSanitizesClaudeExtraWindow(t *testing.T) {
+	used := 10.0
+	var buf bytes.Buffer
+	q := quota.Report{Claude: quota.Claude{
+		OK:     true,
+		Used5h: &used,
+		Used7d: &used,
+		Extra:  []quota.ClaudeWin{{Name: "7d \x1b]52;c;evil\x07win\n", Used: &used}},
+	}}
+	Snapshot(&buf, collect.Snapshot{Taken: time.Unix(0, 0).UTC()}, &q, 0)
+	out := buf.String()
+	if strings.ContainsRune(out, 0x1b) || strings.ContainsRune(out, 0x07) {
+		t.Fatalf("ESC/BEL remain:\n%q", out)
+	}
+}

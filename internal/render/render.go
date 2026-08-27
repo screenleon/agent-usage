@@ -91,7 +91,7 @@ func writeClaude(w io.Writer, c quota.Claude) {
 		}
 		ux, rx := pctPair(x.Used)
 		fmt.Fprintf(w, "          %s%s used %s remaining %s  reset %s\n",
-			warnUsed(x.Used), x.Name, ux, rx, fmtUnixDateTime(x.Reset))
+			warnUsed(x.Used), collect.SanitizeDisplay(x.Name), ux, rx, fmtUnixDateTime(x.Reset))
 	}
 }
 
