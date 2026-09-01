@@ -202,7 +202,7 @@ func claudeSessions(home string, procs map[int]Proc, used map[int]bool, recent b
 		if meta.PID != 0 {
 			pid = meta.PID
 		}
-		live := pidAliveAgent(pid, "claude")
+		live := liveProcIs(procs, pid, "claude")
 		if !live {
 			if !recent || idleN >= 8 || !sessionFresh(meta.UpdatedAt, recentFor) {
 				continue
@@ -433,7 +433,7 @@ func grokSessions(home string, procs map[int]Proc, used map[int]bool, recent boo
 	}
 	var out []Session
 	for _, it := range items {
-		live := pidAliveAgent(it.PID, "grok")
+		live := liveProcIs(procs, it.PID, "grok")
 		if !live && !recent {
 			continue
 		}
@@ -625,6 +625,11 @@ func seenDirs(existing []Session, agent string, liveOnly bool) map[string]bool {
 
 func idleSession(agent, dir string) Session {
 	return Session{Live: false, Status: "idle", Agent: agent, Dir: dir}
+}
+
+func liveProcIs(procs map[int]Proc, pid int, agent string) bool {
+	p, ok := procs[pid]
+	return ok && p.Agent == agent
 }
 
 func parseTok(s string) *float64 {

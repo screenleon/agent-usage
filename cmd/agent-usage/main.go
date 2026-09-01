@@ -94,12 +94,19 @@ func main() {
 }
 
 func runWatch(w io.Writer, printOnce func() int, interval time.Duration, failUnder *float64, stop <-chan os.Signal) int {
-	fmt.Fprint(w, cursorHide)
-	defer fmt.Fprint(w, cursorShow)
+	ansi := enableConsoleANSI(w)
+	if ansi {
+		fmt.Fprint(w, cursorHide)
+		defer fmt.Fprint(w, cursorShow)
+	}
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	refresh := func() int {
-		fmt.Fprint(w, "\033[H\033[J")
+		if ansi {
+			fmt.Fprint(w, "\033[H\033[J")
+		} else {
+			fmt.Fprintln(w)
+		}
 		return printOnce()
 	}
 	if code := refresh(); failUnder != nil && code != 0 {
