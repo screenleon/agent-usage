@@ -64,8 +64,15 @@ func Collect(opt Options) Snapshot {
 	if opt.want("grok") {
 		rows = append(rows, grokSessions(opt.Home, procs, used, opt.Recent)...)
 	}
+	managedLiveAgents := liveSessionAgents(rows)
 	for pid, p := range procs {
 		if used[pid] || !opt.want(p.Agent) {
+			continue
+		}
+		// Claude and Grok have their own session metadata. On Windows, process
+		// helpers do not expose a CWD, so prefer those authoritative rows and
+		// do not render their otherwise-unmatched helper processes as sessions.
+		if runtime.GOOS == "windows" && p.CWD == "?" && managedLiveAgents[p.Agent] {
 			continue
 		}
 		// A Windows Codex invocation can have several codex.exe helper
@@ -644,6 +651,16 @@ func idleSession(agent, dir string) Session {
 func liveProcIs(procs map[int]Proc, pid int, agent string) bool {
 	p, ok := procs[pid]
 	return ok && p.Agent == agent
+}
+
+func liveSessionAgents(rows []Session) map[string]bool {
+	out := make(map[string]bool)
+	for _, row := range rows {
+		if row.Live {
+			out[row.Agent] = true
+		}
+	}
+	return out
 }
 
 func parseTok(s string) *float64 {

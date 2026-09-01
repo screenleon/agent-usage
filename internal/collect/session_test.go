@@ -165,6 +165,17 @@ func TestCodexCtxOmitsCumulativeTokens(t *testing.T) {
 	}
 }
 
+func TestLiveSessionAgents(t *testing.T) {
+	got := liveSessionAgents([]Session{
+		{Agent: "claude", Live: true},
+		{Agent: "codex", Live: false},
+		{Agent: "grok", Live: true},
+	})
+	if !got["claude"] || !got["grok"] || got["codex"] {
+		t.Fatalf("got %#v", got)
+	}
+}
+
 // loadCodexWindows maps only valid slugs; percent applies for 1–99.
 // Steps:
 // 1. Write each models_cache.json fixture (or omit the file).
