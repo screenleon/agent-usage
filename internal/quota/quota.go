@@ -99,7 +99,7 @@ func Load(opt Options) Report {
 	if filter.Wants(opt.Agents, "claude") {
 		rep.Claude = readClaude(opt.Home)
 	}
-	needGrok := filter.Wants(opt.Agents, "grok")
+	needGrok := filter.Wants(opt.Agents, "grok") && grokConfigured(opt.Home)
 	needCodex := filter.Wants(opt.Agents, "codex")
 	if !needGrok && !needCodex {
 		return rep
@@ -149,6 +149,11 @@ func Load(opt Options) Report {
 	}
 	writeCacheMerge(opt.Home, rep, fetchGrokNeed, fetchCodexNeed)
 	return rep
+}
+
+func grokConfigured(home string) bool {
+	st, err := os.Stat(filepath.Join(home, ".grok", "auth.json"))
+	return err == nil && !st.IsDir()
 }
 
 func readClaude(home string) Claude {

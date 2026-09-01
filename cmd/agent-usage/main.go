@@ -104,17 +104,13 @@ func runWatch(w io.Writer, printOnce func() int, interval time.Duration, failUnd
 	defer tick.Stop()
 	refresh := func() int {
 		if ansi {
-			// Overwrite first, then erase any old lines below the new frame. This
-			// avoids the visible blank flash caused by clearing the whole screen
-			// before every Windows Terminal refresh.
-			fmt.Fprint(w, "\033[H")
+			// A complete clear prevents stale long lines from a previous frame from
+			// being mixed into a shorter current frame.
+			fmt.Fprint(w, "\033[H\033[J")
 		} else {
 			fmt.Fprintln(w)
 		}
 		code := printOnce()
-		if ansi {
-			fmt.Fprint(w, "\033[J")
-		}
 		return code
 	}
 	if code := refresh(); failUnder != nil && code != 0 {

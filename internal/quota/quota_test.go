@@ -78,6 +78,23 @@ func TestGrokToken(t *testing.T) {
 	}
 }
 
+func TestGrokConfigured(t *testing.T) {
+	home := t.TempDir()
+	if grokConfigured(home) {
+		t.Fatal("missing auth should not configure Grok")
+	}
+	dir := filepath.Join(home, ".grok")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !grokConfigured(home) {
+		t.Fatal("auth.json should configure Grok")
+	}
+}
+
 // grokAuth reports stale when expires_at is in the past.
 func TestGrokAuthExpired(t *testing.T) {
 	home := t.TempDir()
