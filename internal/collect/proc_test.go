@@ -14,6 +14,9 @@ func TestNodeWraps(t *testing.T) {
 	if nodeWraps("/usr/bin/node /home/u/.nvm/bin/grok", "claude") {
 		t.Fatal("other")
 	}
+	if !nodeWraps(`C:\\Program Files\\nodejs\\node.exe C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js`, "claude") {
+		t.Fatal("windows node wrapper")
+	}
 }
 
 func TestClassify(t *testing.T) {

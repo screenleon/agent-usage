@@ -1,6 +1,6 @@
 # agent-usage
 
-Lightweight live monitor for coding-agent sessions on Linux.
+Lightweight live monitor for coding-agent sessions on Linux and Windows.
 
 It is the small replacement for [abtop](https://github.com/graykode/abtop) / `aum`:
 one binary, no TUI framework, no transcript scan.
@@ -20,7 +20,8 @@ agent-usage --recent
 
 | Source | Files | Why it stays cheap |
 | --- | --- | --- |
-| Processes | `/proc/<pid>/{comm,cmdline,cwd,stat,children}` | only pids whose `comm` is claude / grok / codex / opencode |
+| Processes (Linux) | `/proc/<pid>/{comm,cmdline,cwd,stat,children}` | only pids whose `comm` is claude / grok / codex / opencode |
+| Processes (Windows) | CIM `Win32_Process` via built-in PowerShell | only matching agent processes; Windows does not expose another process's CWD |
 | Claude sessions | `~/.claude/sessions/<pid>.json` | skip if that pid is not a live `claude` |
 | Claude tokens / CTX | last **8KiB** of the matching project jsonl (then **32KiB** / **64KiB** if that tail has no usage) ÷ 200k (or 1M if the model name contains `1m`) | no full history walk |
 | Codex tokens / CTX | `state_5.sqlite` `tokens_used` ÷ `models_cache.json` `context_window` (× effective %) | one cache file + one SQL row |
@@ -49,7 +50,7 @@ If resident size ever matters more than compile speed, a Rust port can keep the 
 
 ## Install
 
-Linux only (reads `/proc`). No Go toolchain required. Optional: `sqlite3` on `PATH` for Codex tokens/CTX (`-json` preferred; older binaries fall back to USV, flattening newlines and USV bytes in titles so later columns stay aligned).
+No Go toolchain is required. Optional: `sqlite3` on `PATH` for Codex tokens/CTX (`-json` preferred; older binaries fall back to USV, flattening newlines and USV bytes in titles so later columns stay aligned).
 
 ```bash
 arch=$(uname -m)
@@ -78,7 +79,19 @@ cd agent-usage
 make install          # -> ~/.local/bin/agent-usage
 ```
 
-Requires Go 1.21+. `make release` writes `dist/agent-usage-linux-{amd64,arm64}` for copying to machines that only need the binary.
+Requires Go 1.21+. `make release` writes Linux and Windows (`amd64`, `arm64`) binaries to `dist/`.
+
+### Windows
+
+Download `agent-usage-windows-amd64.exe` from the latest release, place it in a directory on `PATH`, then run it from PowerShell or Windows Terminal:
+
+```powershell
+agent-usage.exe
+agent-usage.exe watch
+agent-usage.exe --recent
+```
+
+The Windows build reads the same `%USERPROFILE%\.claude`, `%USERPROFILE%\.codex`, and `%USERPROFILE%\.grok` data as the CLIs. Its process list uses built-in PowerShell CIM and falls back to `Get-Process` when CIM is restricted by policy, so no WSL is required. Because Windows does not reveal another process's working directory, an agent started without `--cd` uses the most recent active Codex thread for its context display; use `--recent` to see all active local Codex threads.
 
 ## Not in scope
 

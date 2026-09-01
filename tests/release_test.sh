@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract for make release: linux/amd64 + linux/arm64 artifacts and SHA256SUMS.
+# Contract for make release: Linux and Windows amd64/arm64 artifacts and SHA256SUMS.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -8,6 +8,8 @@ trap 'rm -rf "$tmp"' EXIT
 
 amd64_name=agent-usage-linux-amd64
 arm64_name=agent-usage-linux-arm64
+win_amd64_name=agent-usage-windows-amd64.exe
+win_arm64_name=agent-usage-windows-arm64.exe
 workflow="$root/.github/workflows/release.yml"
 ci_workflow="$root/.github/workflows/ci.yml"
 makefile="$root/Makefile"
@@ -23,27 +25,37 @@ grep -q 'GOARCH=amd64' "$makefile" || fail "Makefile missing GOARCH=amd64"
 grep -q 'GOARCH=arm64' "$makefile" || fail "Makefile missing GOARCH=arm64"
 grep -q "$amd64_name" "$makefile" || fail "Makefile missing $amd64_name"
 grep -q "$arm64_name" "$makefile" || fail "Makefile missing $arm64_name"
+grep -q "$win_amd64_name" "$makefile" || fail "Makefile missing $win_amd64_name"
+grep -q "$win_arm64_name" "$makefile" || fail "Makefile missing $win_arm64_name"
 
 make -C "$root" release DIST="$tmp"
 
 amd64="$tmp/$amd64_name"
 arm64="$tmp/$arm64_name"
+win_amd64="$tmp/$win_amd64_name"
+win_arm64="$tmp/$win_arm64_name"
 sums="$tmp/SHA256SUMS"
 
 [[ -x $amd64 ]] || fail "missing executable $amd64_name"
 [[ -x $arm64 ]] || fail "missing executable $arm64_name"
+[[ -f $win_amd64 ]] || fail "missing executable $win_amd64_name"
+[[ -f $win_arm64 ]] || fail "missing executable $win_arm64_name"
 [[ -f $sums ]] || fail "missing SHA256SUMS"
 
 # Exactly one checksum line per published binary; names are basenames.
 mapfile -t sum_lines < <(grep -v '^$' "$sums")
-[[ ${#sum_lines[@]} -eq 2 ]] || fail "SHA256SUMS should have exactly 2 lines, got ${#sum_lines[@]}"
+[[ ${#sum_lines[@]} -eq 4 ]] || fail "SHA256SUMS should have exactly 4 lines, got ${#sum_lines[@]}"
 printf '%s\n' "${sum_lines[@]}" | grep -q " ${amd64_name}$" || fail "SHA256SUMS missing $amd64_name"
 printf '%s\n' "${sum_lines[@]}" | grep -q " ${arm64_name}$" || fail "SHA256SUMS missing $arm64_name"
+printf '%s\n' "${sum_lines[@]}" | grep -q " ${win_amd64_name}$" || fail "SHA256SUMS missing $win_amd64_name"
+printf '%s\n' "${sum_lines[@]}" | grep -q " ${win_arm64_name}$" || fail "SHA256SUMS missing $win_arm64_name"
 
 file "$amd64" | grep -qi 'statically linked' || fail "$amd64_name is not statically linked"
 file "$arm64" | grep -qi 'statically linked' || fail "$arm64_name is not statically linked"
 file "$amd64" | grep -qi 'x86-64' || fail "$amd64_name is not linux/amd64"
 file "$arm64" | grep -Eqi 'ARM aarch64|aarch64' || fail "$arm64_name is not linux/arm64"
+file "$win_amd64" | grep -Eqi 'PE32\+.*x86-64' || fail "$win_amd64_name is not windows/amd64"
+file "$win_arm64" | grep -Eqi 'PE32\+.*Aarch64|PE32\+.*ARM64' || fail "$win_arm64_name is not windows/arm64"
 
 (cd "$tmp" && sha256sum -c SHA256SUMS) || fail "SHA256SUMS does not match artifacts"
 
@@ -126,7 +138,7 @@ rm -f "$mut"
 # Same-origin SHA256SUMS is a corruption check, not publisher authentication.
 # A substituted binary plus a rewritten checksum file still verifies.
 echo substituted >"$tmp/agent-usage-linux-amd64"
-(cd "$tmp" && sha256sum "$amd64_name" "$arm64_name" >SHA256SUMS)
+(cd "$tmp" && sha256sum "$amd64_name" "$arm64_name" "$win_amd64_name" "$win_arm64_name" >SHA256SUMS)
 (cd "$tmp" && sha256sum -c SHA256SUMS) >/dev/null || fail "rewritten same-origin checksums should still verify"
 readme="$root/README.md"
 grep -q 'does not authenticate the publisher' "$readme" || fail "README must state SHA256SUMS is not publisher authentication"

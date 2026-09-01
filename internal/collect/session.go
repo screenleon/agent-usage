@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -550,9 +551,18 @@ func readJSON(path string, v any) bool {
 }
 
 func enrichCodex(s *Session, home, cwd, cmd string, windows map[string]int64) {
-	rows := querySQLiteMaps(filepath.Join(home, ".codex", "state_5.sqlite"),
-		`SELECT tokens_used, title, IFNULL(model,'') AS model FROM threads WHERE archived=0 AND cwd=? ORDER BY updated_at DESC LIMIT 1`,
-		cwd)
+	db := filepath.Join(home, ".codex", "state_5.sqlite")
+	var rows []map[string]string
+	if cwd != "" && cwd != "?" {
+		rows = querySQLiteMaps(db,
+			`SELECT tokens_used, title, IFNULL(model,'') AS model FROM threads WHERE archived=0 AND cwd=? ORDER BY updated_at DESC LIMIT 1`, cwd)
+	} else if runtime.GOOS == "windows" {
+		// Windows does not make another process's current directory available.
+		// Fall back to the latest active thread so a normal Codex invocation
+		// still shows its local context use; --recent lists all active threads.
+		rows = querySQLiteMaps(db,
+			`SELECT tokens_used, title, IFNULL(model,'') AS model FROM threads WHERE archived=0 ORDER BY updated_at DESC LIMIT 1`)
+	}
 	model := firstFlagValue(cmd, "-m", "--model")
 	if len(rows) > 0 {
 		row := rows[0]
@@ -629,11 +639,15 @@ func shortPath(p string) string {
 	if p == "" || p == "?" {
 		return "?"
 	}
-	p = strings.TrimRight(p, "/")
-	if home, _ := os.UserHomeDir(); home != "" && strings.HasPrefix(p, home+"/") {
-		p = "~" + p[len(home):]
+	p = strings.TrimRight(p, "/\\")
+	if home, _ := os.UserHomeDir(); home != "" {
+		normP := strings.ReplaceAll(p, "\\", "/")
+		normHome := strings.TrimRight(strings.ReplaceAll(home, "\\", "/"), "/")
+		if strings.EqualFold(normP, normHome) || strings.HasPrefix(strings.ToLower(normP), strings.ToLower(normHome+"/")) {
+			p = "~" + normP[len(normHome):]
+		}
 	}
-	if i := strings.LastIndex(p, "/"); i >= 0 && i+1 < len(p) {
+	if i := strings.LastIndexAny(p, "/\\"); i >= 0 && i+1 < len(p) {
 		p = p[i+1:]
 	}
 	return SanitizeDisplay(p)

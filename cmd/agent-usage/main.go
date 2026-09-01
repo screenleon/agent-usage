@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/screenleon/agent-usage/internal/collect"
@@ -85,7 +84,9 @@ func main() {
 	}
 
 	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	// os.Interrupt is available on Windows and Unix. SIGTERM is deliberately
+	// avoided here so the binary remains cross-compilable without build tags.
+	signal.Notify(ch, os.Interrupt)
 	code := runWatch(os.Stdout, printOnce, cfg.interval, cfg.failUnder, ch)
 	if code != 0 {
 		os.Exit(code)
