@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -365,6 +366,9 @@ func TestFlattenSQLNewlinesKeepsTitleAlias(t *testing.T) {
 // 2. Call querySQLiteMaps against a dummy db path.
 // 3. Expect tokens_used, title, and model from the fallback row.
 func TestQuerySQLiteMapsFallsBackWhenJSONUnsupported(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell stub")
+	}
 	dir := t.TempDir()
 	db := filepath.Join(dir, "state_5.sqlite")
 	if err := os.WriteFile(db, []byte("x"), 0o600); err != nil {

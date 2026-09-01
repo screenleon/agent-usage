@@ -96,7 +96,7 @@ func resolveCWD(procCWD, cd string) string {
 	if cd == "" {
 		return procCWD
 	}
-	if filepath.IsAbs(cd) {
+	if filepath.IsAbs(cd) || strings.HasPrefix(cd, "/") {
 		return cd
 	}
 	if procCWD == "" || procCWD == "?" {

@@ -1,6 +1,9 @@
 package collect
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 // classify maps process comm/argv0 to a known agent name and ignores helpers.
 // Steps:
@@ -99,10 +102,10 @@ func TestFlagValue(t *testing.T) {
 // 2. Call resolveCWD.
 // 3. Expect the joined absolute path only for the relative input.
 func TestResolveCWD(t *testing.T) {
-	if g := resolveCWD("/home/u/proj", "."); g != "/home/u/proj" {
+	if g := resolveCWD("/home/u/proj", "."); g != filepath.Clean("/home/u/proj") {
 		t.Fatalf("dot: %q", g)
 	}
-	if g := resolveCWD("/home/u/proj", "subdir"); g != "/home/u/proj/subdir" {
+	if g := resolveCWD("/home/u/proj", "subdir"); g != filepath.Join("/home/u/proj", "subdir") {
 		t.Fatalf("rel: %q", g)
 	}
 	if g := resolveCWD("/home/u/proj", "/abs/path"); g != "/abs/path" {
