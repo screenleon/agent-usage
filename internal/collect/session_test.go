@@ -155,6 +155,16 @@ func TestCodexWindow(t *testing.T) {
 	}
 }
 
+func TestCodexCtxOmitsCumulativeTokens(t *testing.T) {
+	win := map[string]int64{"gpt-5.6-terra": 258400}
+	if got := codexCtx(129200, "gpt-5.6-terra", win); got != "50%" {
+		t.Fatalf("within window: %q", got)
+	}
+	if got := codexCtx(12_798_336, "gpt-5.6-terra", win); got != "" {
+		t.Fatalf("cumulative tokens should not be ctx: %q", got)
+	}
+}
+
 // loadCodexWindows maps only valid slugs; percent applies for 1–99.
 // Steps:
 // 1. Write each models_cache.json fixture (or omit the file).

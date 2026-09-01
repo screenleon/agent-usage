@@ -55,6 +55,7 @@ func Collect(opt Options) Snapshot {
 	procs := liveAgentProcs()
 	codexWin := loadCodexWindows(opt.Home)
 	var rows []Session
+	unknownWindowsCodex := false
 
 	used := map[int]bool{}
 	if opt.want("claude") {
@@ -66,6 +67,16 @@ func Collect(opt Options) Snapshot {
 	for pid, p := range procs {
 		if used[pid] || !opt.want(p.Agent) {
 			continue
+		}
+		// A Windows Codex invocation can have several codex.exe helper
+		// processes. Their working directories are intentionally not exposed by
+		// Windows, so they cannot be matched to separate SQLite threads. Show one
+		// representative row instead of repeating the latest thread for each PID.
+		if runtime.GOOS == "windows" && p.Agent == "codex" && p.CWD == "?" {
+			if unknownWindowsCodex {
+				continue
+			}
+			unknownWindowsCodex = true
 		}
 		s := leftoverSession(p, opt.Home, codexWin)
 		rows = append(rows, s)
@@ -574,13 +585,16 @@ func enrichCodex(s *Session, home, cwd, cmd string, windows map[string]int64) {
 		}
 		if t := tidyTitle(row["title"]); t != "" {
 			s.Title = t
+			if cwd == "" || cwd == "?" {
+				s.Title = "latest local thread: " + t
+			}
 		}
 	}
 	if model != "" {
 		s.Model = model
 	}
 	if s.Tokens != nil {
-		s.Ctx = ctxPct(*s.Tokens, codexWindow(model, windows))
+		s.Ctx = codexCtx(*s.Tokens, model, windows)
 	}
 }
 
@@ -601,7 +615,7 @@ func recentCodexIdle(home string, existing []Session, window time.Duration, wind
 		s.Model = row["model"]
 		if t := parseTok(row["tokens_used"]); t != nil {
 			s.Tokens = t
-			s.Ctx = ctxPct(*t, codexWindow(row["model"], windows))
+			s.Ctx = codexCtx(*t, row["model"], windows)
 		}
 		out = append(out, s)
 		seen[dir] = true
@@ -683,6 +697,17 @@ func codexWindow(model string, windows map[string]int64) int64 {
 		return 272000 * 95 / 100
 	}
 	return 0
+}
+
+func codexCtx(tokens float64, model string, windows map[string]int64) string {
+	window := codexWindow(model, windows)
+	// Codex's state_5.sqlite tokens_used is cumulative for long-running
+	// threads. Once it exceeds the context window it is not a current-context
+	// measurement, so showing a capped 999% is misleading.
+	if window <= 0 || tokens > float64(window) {
+		return ""
+	}
+	return ctxPct(tokens, window)
 }
 
 func firstNonEmpty(ss ...string) string {
