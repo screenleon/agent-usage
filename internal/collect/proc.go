@@ -3,6 +3,7 @@ package collect
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -52,7 +53,12 @@ func classify(comm, cmdline string) string {
 }
 
 func nodeWraps(cmdline, name string) bool {
-	return strings.Contains(cmdline, "/bin/"+name) || strings.HasSuffix(strings.TrimSpace(cmdline), "/"+name)
+	cmdline = strings.ToLower(strings.ReplaceAll(cmdline, "\\", "/"))
+	name = strings.ToLower(name)
+	return strings.Contains(cmdline, "/bin/"+name) ||
+		strings.Contains(cmdline, "/"+name+".") ||
+		strings.Contains(cmdline, "/"+name+"-") ||
+		strings.HasSuffix(strings.TrimSpace(cmdline), "/"+name)
 }
 
 func firstArgBase(cmdline string) string {
@@ -134,6 +140,9 @@ func readFileTrim(path string) string {
 }
 
 func liveAgentProcs() map[int]Proc {
+	if runtime.GOOS == "windows" {
+		return liveAgentProcsWindows()
+	}
 	out := make(map[int]Proc)
 	ents, err := os.ReadDir("/proc")
 	if err != nil {
@@ -198,6 +207,10 @@ func cmdlineOf(pid int) string {
 func pidAliveAgent(pid int, want string) bool {
 	if pid <= 0 {
 		return false
+	}
+	if runtime.GOOS == "windows" {
+		p, ok := liveAgentProcsWindows()[pid]
+		return ok && p.Agent == want
 	}
 	if _, err := os.Stat(filepath.Join("/proc", strconv.Itoa(pid))); err != nil {
 		return false

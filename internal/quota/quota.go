@@ -592,7 +592,11 @@ func get(c *http.Client, url, bearer, account string) (int, []byte, error) {
 func cachePath(home string) string {
 	base := os.Getenv("XDG_CACHE_HOME")
 	if base == "" {
-		base = filepath.Join(home, ".cache")
+		if dir, err := os.UserCacheDir(); err == nil && dir != "" {
+			base = dir
+		} else {
+			base = filepath.Join(home, ".cache")
+		}
 	}
 	return filepath.Join(base, "agent-usage", "quota.json")
 }
