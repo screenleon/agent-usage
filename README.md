@@ -7,7 +7,7 @@ one binary, no TUI framework, no transcript scan.
 
 ```
 agent-usage           # one snapshot
-agent-usage watch     # refresh every 2s
+agent-usage watch     # refresh every 2s (5s on Windows)
 agent-usage watch 1
 agent-usage --offline
 agent-usage --json

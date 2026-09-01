@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -19,7 +20,7 @@ import (
 const usageText = `Usage: agent-usage [watch|-w [N]] [--recent] [--offline] [--json]
                    [--agent a,b] [--fail-under N] [-h]
 
-  watch / -w [N]  keep refreshing (default 2s). Ctrl-C to stop
+  watch / -w [N]  keep refreshing (default 2s; 5s on Windows). Ctrl-C to stop
   --recent        include idle sessions updated in the last 2 hours
   --offline       skip Grok/Codex quota HTTP fetches
   --json          machine-readable snapshot
@@ -103,11 +104,18 @@ func runWatch(w io.Writer, printOnce func() int, interval time.Duration, failUnd
 	defer tick.Stop()
 	refresh := func() int {
 		if ansi {
-			fmt.Fprint(w, "\033[H\033[J")
+			// Overwrite first, then erase any old lines below the new frame. This
+			// avoids the visible blank flash caused by clearing the whole screen
+			// before every Windows Terminal refresh.
+			fmt.Fprint(w, "\033[H")
 		} else {
 			fmt.Fprintln(w)
 		}
-		return printOnce()
+		code := printOnce()
+		if ansi {
+			fmt.Fprint(w, "\033[J")
+		}
+		return code
 	}
 	if code := refresh(); failUnder != nil && code != 0 {
 		return code
@@ -125,6 +133,13 @@ func runWatch(w io.Writer, printOnce func() int, interval time.Duration, failUnd
 	}
 }
 
+func defaultWatchInterval() time.Duration {
+	if runtime.GOOS == "windows" {
+		return 5 * time.Second
+	}
+	return 2 * time.Second
+}
+
 type config struct {
 	watch     bool
 	interval  time.Duration
@@ -137,7 +152,7 @@ type config struct {
 }
 
 func parseArgs(args []string) (config, error) {
-	cfg := config{interval: 2 * time.Second}
+	cfg := config{interval: defaultWatchInterval()}
 	if len(args) > 0 && args[0] == "watch" {
 		cfg.watch = true
 		args = args[1:]
