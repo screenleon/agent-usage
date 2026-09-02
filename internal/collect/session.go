@@ -55,7 +55,6 @@ func Collect(opt Options) Snapshot {
 	procs := liveAgentProcs()
 	codexWin := loadCodexWindows(opt.Home)
 	var rows []Session
-	unknownWindowsCodex := false
 
 	used := map[int]bool{}
 	if opt.want("claude") {
@@ -75,16 +74,6 @@ func Collect(opt Options) Snapshot {
 		if runtime.GOOS == "windows" && p.CWD == "?" && managedLiveAgents[p.Agent] {
 			continue
 		}
-		// A Windows Codex invocation can have several codex.exe helper
-		// processes. Their working directories are intentionally not exposed by
-		// Windows, so they cannot be matched to separate SQLite threads. Show one
-		// representative row instead of repeating the latest thread for each PID.
-		if runtime.GOOS == "windows" && p.Agent == "codex" && p.CWD == "?" {
-			if unknownWindowsCodex {
-				continue
-			}
-			unknownWindowsCodex = true
-		}
 		s := leftoverSession(p, opt.Home, codexWin)
 		rows = append(rows, s)
 		used[pid] = true
@@ -101,6 +90,10 @@ func Collect(opt Options) Snapshot {
 }
 
 func leftoverSession(p Proc, home string, windows map[string]int64) Session {
+	return leftoverSessionForOS(p, home, windows, runtime.GOOS)
+}
+
+func leftoverSessionForOS(p Proc, home string, windows map[string]int64, goos string) Session {
 	st := "run"
 	src := p.Raw
 	if src == "" {
@@ -113,6 +106,13 @@ func leftoverSession(p Proc, home string, windows map[string]int64) Session {
 	s := sessionFromProc(p, st)
 	switch p.Agent {
 	case "codex":
+		// Windows does not reveal another process's working directory. Do not
+		// attach the same newest SQLite thread to every unmatched codex.exe
+		// process; render each process instead, with its limitation explicit.
+		if goos == "windows" && p.CWD == "?" {
+			s.Title = "unmatched Codex process"
+			break
+		}
 		enrichCodex(&s, home, p.CWD, src, windows)
 		if s.Title == "" && exec {
 			s.Title = "exec"

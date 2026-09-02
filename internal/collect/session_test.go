@@ -577,6 +577,19 @@ func TestLeftoverSessionCodexExecFallback(t *testing.T) {
 	}
 }
 
+// Unknown Windows Codex processes remain individually visible, without being
+// incorrectly enriched from the same newest local thread.
+func TestLeftoverSessionUnknownWindowsCodex(t *testing.T) {
+	home := t.TempDir()
+	writeCodexFixture(t, home, threadsSchema+
+		"INSERT INTO threads VALUES ('t1','/tmp/latest','latest',129200,0,2000000000,'gpt-5.6-terra');\n")
+	p := Proc{PID: 42, Agent: "codex", CWD: "?", Cmd: "codex", Raw: "codex"}
+	s := leftoverSessionForOS(p, home, map[string]int64{"gpt-5.6-terra": 258400}, "windows")
+	if s.Title != "unmatched Codex process" || s.Tokens != nil || s.Model != "" || s.Ctx != "" {
+		t.Fatalf("got %#v", s)
+	}
+}
+
 // recentCodexIdle reports Ctx for recent unused Codex threads.
 // Steps:
 // 1. Insert a recent thread under /tmp/idleproj with a known model.
