@@ -96,7 +96,7 @@ func resolveCWD(procCWD, cd string) string {
 	if cd == "" {
 		return procCWD
 	}
-	if filepath.IsAbs(cd) {
+	if filepath.IsAbs(cd) || strings.HasPrefix(cd, "/") {
 		return cd
 	}
 	if procCWD == "" || procCWD == "?" {
@@ -196,26 +196,8 @@ func readCWD(pid int) string {
 	return p
 }
 
-func commOf(pid int) string {
-	return readFileTrim(filepath.Join("/proc", strconv.Itoa(pid), "comm"))
-}
-
 func cmdlineOf(pid int) string {
 	return string(readFileBytes(filepath.Join("/proc", strconv.Itoa(pid), "cmdline")))
-}
-
-func pidAliveAgent(pid int, want string) bool {
-	if pid <= 0 {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		p, ok := liveAgentProcsWindows()[pid]
-		return ok && p.Agent == want
-	}
-	if _, err := os.Stat(filepath.Join("/proc", strconv.Itoa(pid))); err != nil {
-		return false
-	}
-	return classify(commOf(pid), cmdlineOf(pid)) == want
 }
 
 func childPIDs(pid int) []int {

@@ -1,6 +1,10 @@
 package collect
 
-import "testing"
+import (
+	"path/filepath"
+	"runtime"
+	"testing"
+)
 
 // classify maps process comm/argv0 to a known agent name and ignores helpers.
 // Steps:
@@ -99,10 +103,10 @@ func TestFlagValue(t *testing.T) {
 // 2. Call resolveCWD.
 // 3. Expect the joined absolute path only for the relative input.
 func TestResolveCWD(t *testing.T) {
-	if g := resolveCWD("/home/u/proj", "."); g != "/home/u/proj" {
+	if g := resolveCWD("/home/u/proj", "."); g != filepath.Clean("/home/u/proj") {
 		t.Fatalf("dot: %q", g)
 	}
-	if g := resolveCWD("/home/u/proj", "subdir"); g != "/home/u/proj/subdir" {
+	if g := resolveCWD("/home/u/proj", "subdir"); g != filepath.Join("/home/u/proj", "subdir") {
 		t.Fatalf("rel: %q", g)
 	}
 	if g := resolveCWD("/home/u/proj", "/abs/path"); g != "/abs/path" {
@@ -110,6 +114,19 @@ func TestResolveCWD(t *testing.T) {
 	}
 	if g := resolveCWD("/home/u/proj", ""); g != "/home/u/proj" {
 		t.Fatalf("empty: %q", g)
+	}
+}
+
+// On Windows, filepath.IsAbs does not recognize a POSIX-style "/work/repo"
+// path as absolute, so resolveCWD keeps its own explicit slash-prefix check.
+// A drive-qualified process cwd exercises that branch specifically: without
+// it, "/work/repo" would otherwise be (wrongly) joined onto "C:\other\dir".
+func TestResolveCWDWindowsSlashPrefixedCd(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("filepath.IsAbs is only POSIX-blind to a leading slash on windows")
+	}
+	if g := resolveCWD(`C:\other\dir`, "/work/repo"); g != "/work/repo" {
+		t.Fatalf("slash-prefixed --cd should stay absolute: %q", g)
 	}
 }
 

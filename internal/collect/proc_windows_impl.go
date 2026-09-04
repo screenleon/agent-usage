@@ -58,11 +58,11 @@ func windowsProcessOutput(script string) ([]byte, error) {
 }
 
 type windowsProcess struct {
-	PID        int    `json:"ProcessId"`
-	ParentPID  int    `json:"ParentProcessId"`
-	Name       string `json:"Name"`
+	PID         int    `json:"ProcessId"`
+	ParentPID   int    `json:"ParentProcessId"`
+	Name        string `json:"Name"`
 	CommandLine string `json:"CommandLine"`
-	WorkingSet string `json:"WorkingSetSize"`
+	WorkingSet  string `json:"WorkingSetSize"`
 }
 
 func (p *windowsProcess) UnmarshalJSON(b []byte) error {

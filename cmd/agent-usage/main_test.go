@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,12 @@ func TestWatchFailUnderRestoresCursor(t *testing.T) {
 	out := buf.String()
 	hide := strings.Index(out, cursorHide)
 	show := strings.LastIndex(out, cursorShow)
+	if runtime.GOOS == "windows" {
+		if hide >= 0 || show >= 0 {
+			t.Fatalf("unexpected ANSI controls in plain Windows output: %q", out)
+		}
+		return
+	}
 	if hide < 0 || show < 0 || show < hide {
 		t.Fatalf("cursor restore missing: %q", out)
 	}

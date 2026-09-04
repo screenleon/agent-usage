@@ -78,6 +78,30 @@ func TestGrokToken(t *testing.T) {
 	}
 }
 
+func TestGrokConfigured(t *testing.T) {
+	home := t.TempDir()
+	if grokConfigured(home) {
+		t.Fatal("missing auth should not configure Grok")
+	}
+	dir := filepath.Join(home, ".grok")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if grokConfigured(home) {
+		t.Fatal("auth.json without a key should not configure Grok")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"),
+		[]byte(`{"https://auth.x.ai::x":{"key":"g-tok"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !grokConfigured(home) {
+		t.Fatal("auth.json with a key should configure Grok")
+	}
+}
+
 // grokAuth reports stale when expires_at is in the past.
 func TestGrokAuthExpired(t *testing.T) {
 	home := t.TempDir()
@@ -226,6 +250,25 @@ func TestLoadSelectsProvidersAndPreservesCache(t *testing.T) {
 	cached, ok := readCacheFile(home)
 	if !ok || !cached.Grok.OK || !cached.Codex.OK || cached.Grok.Used == nil || *cached.Grok.Used != 10 {
 		t.Fatalf("preserved cache %#v", cached)
+	}
+}
+
+func TestLoadUnconfiguredGrokDefaultVsExplicit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected HTTP call to %s", r.URL)
+		return nil, nil
+	})}
+
+	r := Load(Options{Home: home, Client: client, TTL: time.Minute})
+	if r.Grok.OK || r.Grok.Error != "" {
+		t.Fatalf("default view should silently skip unconfigured grok: %#v", r.Grok)
+	}
+
+	r = Load(Options{Home: home, Client: client, Agents: []string{"grok"}, TTL: time.Minute})
+	if r.Grok.OK || r.Grok.Error == "" {
+		t.Fatalf("explicit --agent grok should still report the missing-token error: %#v", r.Grok)
 	}
 }
 

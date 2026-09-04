@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -151,6 +152,49 @@ func TestCodexWindow(t *testing.T) {
 	}
 	if g := codexWindow("mystery-model", win); g != 0 {
 		t.Fatalf("unknown %d", g)
+	}
+}
+
+func TestCodexCtxOmitsCumulativeTokens(t *testing.T) {
+	win := map[string]int64{"gpt-5.6-terra": 258400}
+	if got := codexCtx(129200, "gpt-5.6-terra", win); got != "50%" {
+		t.Fatalf("within window: %q", got)
+	}
+	if got := codexCtx(12_798_336, "gpt-5.6-terra", win); got != "" {
+		t.Fatalf("cumulative tokens should not be ctx: %q", got)
+	}
+	if got := codexCtx(258399, "gpt-5.6-terra", win); got != "99%" {
+		t.Fatalf("just below window: %q", got)
+	}
+	if got := codexCtx(258400, "gpt-5.6-terra", win); got != "100%" {
+		t.Fatalf("exact window limit: %q", got)
+	}
+	if got := codexCtx(258401, "gpt-5.6-terra", win); got != "" {
+		t.Fatalf("just above window should not be ctx: %q", got)
+	}
+}
+
+func TestLiveProcIs(t *testing.T) {
+	procs := map[int]Proc{42: {PID: 42, Agent: "claude"}}
+	if !liveProcIs(procs, 42, "claude") {
+		t.Fatal("matching pid+agent should be live")
+	}
+	if liveProcIs(procs, 42, "grok") {
+		t.Fatal("wrong agent for a live pid should not be live")
+	}
+	if liveProcIs(procs, 99, "claude") {
+		t.Fatal("absent pid should not be live")
+	}
+}
+
+func TestLiveSessionAgents(t *testing.T) {
+	got := liveSessionAgents([]Session{
+		{Agent: "claude", Live: true},
+		{Agent: "codex", Live: false},
+		{Agent: "grok", Live: true},
+	})
+	if !got["claude"] || !got["grok"] || got["codex"] {
+		t.Fatalf("got %#v", got)
 	}
 }
 
@@ -365,6 +409,9 @@ func TestFlattenSQLNewlinesKeepsTitleAlias(t *testing.T) {
 // 2. Call querySQLiteMaps against a dummy db path.
 // 3. Expect tokens_used, title, and model from the fallback row.
 func TestQuerySQLiteMapsFallsBackWhenJSONUnsupported(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell stub")
+	}
 	dir := t.TempDir()
 	db := filepath.Join(dir, "state_5.sqlite")
 	if err := os.WriteFile(db, []byte("x"), 0o600); err != nil {
@@ -549,6 +596,63 @@ func TestLeftoverSessionCodexExecFallback(t *testing.T) {
 		if s.Status != "busy" || s.Title != "exec" {
 			t.Fatalf("cmd %q status=%q title=%q", cmd, s.Status, s.Title)
 		}
+	}
+}
+
+// Unknown Windows Codex processes remain individually visible, without being
+// incorrectly enriched from the same newest local thread.
+func TestLeftoverSessionUnknownWindowsCodex(t *testing.T) {
+	home := t.TempDir()
+	writeCodexFixture(t, home, threadsSchema+
+		"INSERT INTO threads VALUES ('t1','/tmp/latest','latest',129200,0,2000000000,'gpt-5.6-terra');\n")
+	p := Proc{PID: 42, Agent: "codex", CWD: "?", Cmd: "codex", Raw: "codex"}
+	s := leftoverSession(p, home, map[string]int64{"gpt-5.6-terra": 258400})
+	if s.Title != "unmatched Codex process" || s.Tokens != nil || s.Model != "" || s.Ctx != "" {
+		t.Fatalf("got %#v", s)
+	}
+}
+
+// An unmatched Claude/Grok process with an unreadable CWD is suppressed only
+// while another live session already accounts for that agent; an unmatched
+// Codex process is never suppressed by this predicate, since Collect never
+// has a live Codex row before this loop runs.
+func TestAppendLeftoverSessionsSuppressesOnlyManagedAgentHelpers(t *testing.T) {
+	home := t.TempDir()
+	opt := Options{}
+	procs := map[int]Proc{
+		1: {PID: 1, Agent: "claude", CWD: "?", Cmd: "claude", Raw: "claude"},
+		2: {PID: 2, Agent: "codex", CWD: "?", Cmd: "codex", Raw: "codex"},
+	}
+
+	used := map[int]bool{}
+	rows := []Session{{Agent: "claude", Live: true, PID: 99}}
+	got := appendLeftoverSessions(rows, procs, used, opt, home, nil)
+	if len(got) != 2 {
+		t.Fatalf("want the live claude row plus the codex leftover, got %#v", got)
+	}
+	if used[1] {
+		t.Fatalf("a suppressed claude helper must not be marked used")
+	}
+	var sawCodex, sawSuppressedClaude bool
+	for _, s := range got {
+		if s.Agent == "codex" && s.Title == "unmatched Codex process" {
+			sawCodex = true
+		}
+		if s.Agent == "claude" && s.PID == 1 {
+			sawSuppressedClaude = true
+		}
+	}
+	if !sawCodex {
+		t.Fatalf("expected the unmatched codex process to remain visible: %#v", got)
+	}
+	if sawSuppressedClaude {
+		t.Fatalf("expected the unmatched claude helper to stay suppressed: %#v", got)
+	}
+
+	used = map[int]bool{}
+	got = appendLeftoverSessions(nil, procs, used, opt, home, nil)
+	if len(got) != 2 {
+		t.Fatalf("with no live claude session, the unmatched claude process should render too: %#v", got)
 	}
 }
 

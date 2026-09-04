@@ -7,7 +7,7 @@ one binary, no TUI framework, no transcript scan.
 
 ```
 agent-usage           # one snapshot
-agent-usage watch     # refresh every 2s
+agent-usage watch     # refresh every 2s (5s on Windows)
 agent-usage watch 1
 agent-usage --offline
 agent-usage --json
@@ -91,7 +91,9 @@ agent-usage.exe watch
 agent-usage.exe --recent
 ```
 
-The Windows build reads the same `%USERPROFILE%\.claude`, `%USERPROFILE%\.codex`, and `%USERPROFILE%\.grok` data as the CLIs. Its process list uses built-in PowerShell CIM and falls back to `Get-Process` when CIM is restricted by policy, so no WSL is required. Because Windows does not reveal another process's working directory, an agent started without `--cd` uses the most recent active Codex thread for its context display; use `--recent` to see all active local Codex threads.
+The Windows build reads the same `%USERPROFILE%\.claude`, `%USERPROFILE%\.codex`, and `%USERPROFILE%\.grok` data as the CLIs. Its process list uses built-in PowerShell CIM and falls back to `Get-Process` when CIM is restricted by policy, so no WSL is required. Because Windows does not reveal another process's working directory, an agent started without `--cd` cannot be matched to a local Codex thread for its context display; use `--recent` to see all active local Codex threads.
+
+Windows can expose several `codex.exe` helper processes for one invocation. When their directories cannot be read, agent-usage shows every detected process, but labels each as an unmatched Codex process rather than incorrectly attaching the same latest local thread to all of them. `tokens_used` is cumulative thread usage; a CTX percentage is shown only when it is within the current model window.
 
 ## Not in scope
 

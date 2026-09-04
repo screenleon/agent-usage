@@ -5,7 +5,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -63,14 +62,7 @@ func Collect(opt Options) Snapshot {
 	if opt.want("grok") {
 		rows = append(rows, grokSessions(opt.Home, procs, used, opt.Recent)...)
 	}
-	for pid, p := range procs {
-		if used[pid] || !opt.want(p.Agent) {
-			continue
-		}
-		s := leftoverSession(p, opt.Home, codexWin)
-		rows = append(rows, s)
-		used[pid] = true
-	}
+	rows = appendLeftoverSessions(rows, procs, used, opt, opt.Home, codexWin)
 	if opt.Recent {
 		if opt.want("codex") {
 			rows = append(rows, recentCodexIdle(opt.Home, rows, opt.RecentFor, codexWin)...)
@@ -80,6 +72,28 @@ func Collect(opt Options) Snapshot {
 		}
 	}
 	return Snapshot{Taken: time.Now(), Sessions: rows}
+}
+
+// appendLeftoverSessions renders one Session for each live process not
+// already matched to Claude/Grok session metadata (used[pid] == false).
+func appendLeftoverSessions(rows []Session, procs map[int]Proc, used map[int]bool, opt Options, home string, windows map[string]int64) []Session {
+	managedLiveAgents := liveSessionAgents(rows)
+	for pid, p := range procs {
+		if used[pid] || !opt.want(p.Agent) {
+			continue
+		}
+		// Claude and Grok have their own session metadata. When a process's
+		// working directory can't be read (e.g. Windows helper processes, or
+		// a /proc read denied on the local box), prefer those authoritative
+		// rows and do not render the otherwise-unmatched process as a session.
+		if p.CWD == "?" && managedLiveAgents[p.Agent] {
+			continue
+		}
+		s := leftoverSession(p, home, windows)
+		rows = append(rows, s)
+		used[pid] = true
+	}
+	return rows
 }
 
 func leftoverSession(p Proc, home string, windows map[string]int64) Session {
@@ -95,6 +109,14 @@ func leftoverSession(p Proc, home string, windows map[string]int64) Session {
 	s := sessionFromProc(p, st)
 	switch p.Agent {
 	case "codex":
+		// A process whose working directory can't be read (Windows helper
+		// processes; a denied /proc read locally) can't be matched to a
+		// thread. Render it plainly rather than attaching the same newest
+		// SQLite thread to every such process.
+		if p.CWD == "?" {
+			s.Title = "unmatched Codex process"
+			break
+		}
 		enrichCodex(&s, home, p.CWD, src, windows)
 		if s.Title == "" && exec {
 			s.Title = "exec"
@@ -202,7 +224,7 @@ func claudeSessions(home string, procs map[int]Proc, used map[int]bool, recent b
 		if meta.PID != 0 {
 			pid = meta.PID
 		}
-		live := pidAliveAgent(pid, "claude")
+		live := liveProcIs(procs, pid, "claude")
 		if !live {
 			if !recent || idleN >= 8 || !sessionFresh(meta.UpdatedAt, recentFor) {
 				continue
@@ -433,7 +455,7 @@ func grokSessions(home string, procs map[int]Proc, used map[int]bool, recent boo
 	}
 	var out []Session
 	for _, it := range items {
-		live := pidAliveAgent(it.PID, "grok")
+		live := liveProcIs(procs, it.PID, "grok")
 		if !live && !recent {
 			continue
 		}
@@ -556,12 +578,6 @@ func enrichCodex(s *Session, home, cwd, cmd string, windows map[string]int64) {
 	if cwd != "" && cwd != "?" {
 		rows = querySQLiteMaps(db,
 			`SELECT tokens_used, title, IFNULL(model,'') AS model FROM threads WHERE archived=0 AND cwd=? ORDER BY updated_at DESC LIMIT 1`, cwd)
-	} else if runtime.GOOS == "windows" {
-		// Windows does not make another process's current directory available.
-		// Fall back to the latest active thread so a normal Codex invocation
-		// still shows its local context use; --recent lists all active threads.
-		rows = querySQLiteMaps(db,
-			`SELECT tokens_used, title, IFNULL(model,'') AS model FROM threads WHERE archived=0 ORDER BY updated_at DESC LIMIT 1`)
 	}
 	model := firstFlagValue(cmd, "-m", "--model")
 	if len(rows) > 0 {
@@ -580,7 +596,7 @@ func enrichCodex(s *Session, home, cwd, cmd string, windows map[string]int64) {
 		s.Model = model
 	}
 	if s.Tokens != nil {
-		s.Ctx = ctxPct(*s.Tokens, codexWindow(model, windows))
+		s.Ctx = codexCtx(*s.Tokens, model, windows)
 	}
 }
 
@@ -601,7 +617,7 @@ func recentCodexIdle(home string, existing []Session, window time.Duration, wind
 		s.Model = row["model"]
 		if t := parseTok(row["tokens_used"]); t != nil {
 			s.Tokens = t
-			s.Ctx = ctxPct(*t, codexWindow(row["model"], windows))
+			s.Ctx = codexCtx(*t, row["model"], windows)
 		}
 		out = append(out, s)
 		seen[dir] = true
@@ -625,6 +641,21 @@ func seenDirs(existing []Session, agent string, liveOnly bool) map[string]bool {
 
 func idleSession(agent, dir string) Session {
 	return Session{Live: false, Status: "idle", Agent: agent, Dir: dir}
+}
+
+func liveProcIs(procs map[int]Proc, pid int, agent string) bool {
+	p, ok := procs[pid]
+	return ok && p.Agent == agent
+}
+
+func liveSessionAgents(rows []Session) map[string]bool {
+	out := make(map[string]bool)
+	for _, row := range rows {
+		if row.Live {
+			out[row.Agent] = true
+		}
+	}
+	return out
 }
 
 func parseTok(s string) *float64 {
@@ -678,6 +709,17 @@ func codexWindow(model string, windows map[string]int64) int64 {
 		return 272000 * 95 / 100
 	}
 	return 0
+}
+
+func codexCtx(tokens float64, model string, windows map[string]int64) string {
+	window := codexWindow(model, windows)
+	// Codex's state_5.sqlite tokens_used is cumulative for long-running
+	// threads. Once it exceeds the context window it is not a current-context
+	// measurement, so showing a capped 999% is misleading.
+	if window <= 0 || tokens > float64(window) {
+		return ""
+	}
+	return ctxPct(tokens, window)
 }
 
 func firstNonEmpty(ss ...string) string {
