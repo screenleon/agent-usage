@@ -62,6 +62,21 @@ func Collect(opt Options) Snapshot {
 	if opt.want("grok") {
 		rows = append(rows, grokSessions(opt.Home, procs, used, opt.Recent)...)
 	}
+	rows = appendLeftoverSessions(rows, procs, used, opt, opt.Home, codexWin)
+	if opt.Recent {
+		if opt.want("codex") {
+			rows = append(rows, recentCodexIdle(opt.Home, rows, opt.RecentFor, codexWin)...)
+		}
+		if opt.want("opencode") {
+			rows = append(rows, recentOpenCodeIdle(opt.Home, rows, opt.RecentFor)...)
+		}
+	}
+	return Snapshot{Taken: time.Now(), Sessions: rows}
+}
+
+// appendLeftoverSessions renders one Session for each live process not
+// already matched to Claude/Grok session metadata (used[pid] == false).
+func appendLeftoverSessions(rows []Session, procs map[int]Proc, used map[int]bool, opt Options, home string, windows map[string]int64) []Session {
 	managedLiveAgents := liveSessionAgents(rows)
 	for pid, p := range procs {
 		if used[pid] || !opt.want(p.Agent) {
@@ -74,19 +89,11 @@ func Collect(opt Options) Snapshot {
 		if p.CWD == "?" && managedLiveAgents[p.Agent] {
 			continue
 		}
-		s := leftoverSession(p, opt.Home, codexWin)
+		s := leftoverSession(p, home, windows)
 		rows = append(rows, s)
 		used[pid] = true
 	}
-	if opt.Recent {
-		if opt.want("codex") {
-			rows = append(rows, recentCodexIdle(opt.Home, rows, opt.RecentFor, codexWin)...)
-		}
-		if opt.want("opencode") {
-			rows = append(rows, recentOpenCodeIdle(opt.Home, rows, opt.RecentFor)...)
-		}
-	}
-	return Snapshot{Taken: time.Now(), Sessions: rows}
+	return rows
 }
 
 func leftoverSession(p Proc, home string, windows map[string]int64) Session {

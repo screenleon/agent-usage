@@ -6,32 +6,38 @@ import (
 	"io"
 	"os"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
-const (
-	stdOutputHandle                 = ^uintptr(10) // STD_OUTPUT_HANDLE (-11)
-	enableVirtualTerminalProcessing = 0x0004
-)
+const stdOutputHandle = ^uintptr(10) // STD_OUTPUT_HANDLE (-11)
 
-// enableConsoleANSI enables VT sequences in legacy Windows consoles. When
-// stdout is redirected or a policy disallows it, watch falls back to a plain
-// newline between snapshots instead of printing raw escape characters.
+const defaultWatchInterval = 5 * time.Second
+
 func enableConsoleANSI(w io.Writer) bool {
-	if w != os.Stdout {
-		return false
-	}
+	return enableConsoleANSIWith(w, os.Stdout, kernel32Console{})
+}
+
+type kernel32Console struct{}
+
+func (kernel32Console) stdHandle() (uintptr, bool) {
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	handle, _, _ := kernel32.NewProc("GetStdHandle").Call(stdOutputHandle)
 	if handle == 0 || handle == ^uintptr(0) {
-		return false
+		return 0, false
 	}
+	return handle, true
+}
+
+func (kernel32Console) getMode(handle uintptr) (uint32, bool) {
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	var mode uint32
-	getMode := kernel32.NewProc("GetConsoleMode")
-	if ok, _, _ := getMode.Call(handle, uintptr(unsafe.Pointer(&mode))); ok == 0 {
-		return false
-	}
-	setMode := kernel32.NewProc("SetConsoleMode")
-	ok, _, _ := setMode.Call(handle, uintptr(mode|enableVirtualTerminalProcessing))
+	ok, _, _ := kernel32.NewProc("GetConsoleMode").Call(handle, uintptr(unsafe.Pointer(&mode)))
+	return mode, ok != 0
+}
+
+func (kernel32Console) setMode(handle uintptr, mode uint32) bool {
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	ok, _, _ := kernel32.NewProc("SetConsoleMode").Call(handle, uintptr(mode))
 	return ok != 0
 }

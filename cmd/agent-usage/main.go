@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"os/signal"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -128,13 +127,6 @@ func runWatch(w io.Writer, printOnce func() int, interval time.Duration, failUnd
 	}
 }
 
-func defaultWatchInterval() time.Duration {
-	if runtime.GOOS == "windows" {
-		return 5 * time.Second
-	}
-	return 2 * time.Second
-}
-
 type config struct {
 	watch     bool
 	interval  time.Duration
@@ -147,7 +139,7 @@ type config struct {
 }
 
 func parseArgs(args []string) (config, error) {
-	cfg := config{interval: defaultWatchInterval()}
+	cfg := config{interval: defaultWatchInterval}
 	if len(args) > 0 && args[0] == "watch" {
 		cfg.watch = true
 		args = args[1:]
