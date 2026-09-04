@@ -5,7 +5,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -68,10 +67,11 @@ func Collect(opt Options) Snapshot {
 		if used[pid] || !opt.want(p.Agent) {
 			continue
 		}
-		// Claude and Grok have their own session metadata. On Windows, process
-		// helpers do not expose a CWD, so prefer those authoritative rows and
-		// do not render their otherwise-unmatched helper processes as sessions.
-		if runtime.GOOS == "windows" && p.CWD == "?" && managedLiveAgents[p.Agent] {
+		// Claude and Grok have their own session metadata. When a process's
+		// working directory can't be read (e.g. Windows helper processes, or
+		// a /proc read denied on the local box), prefer those authoritative
+		// rows and do not render the otherwise-unmatched process as a session.
+		if p.CWD == "?" && managedLiveAgents[p.Agent] {
 			continue
 		}
 		s := leftoverSession(p, opt.Home, codexWin)
@@ -90,10 +90,6 @@ func Collect(opt Options) Snapshot {
 }
 
 func leftoverSession(p Proc, home string, windows map[string]int64) Session {
-	return leftoverSessionForOS(p, home, windows, runtime.GOOS)
-}
-
-func leftoverSessionForOS(p Proc, home string, windows map[string]int64, goos string) Session {
 	st := "run"
 	src := p.Raw
 	if src == "" {
@@ -106,10 +102,11 @@ func leftoverSessionForOS(p Proc, home string, windows map[string]int64, goos st
 	s := sessionFromProc(p, st)
 	switch p.Agent {
 	case "codex":
-		// Windows does not reveal another process's working directory. Do not
-		// attach the same newest SQLite thread to every unmatched codex.exe
-		// process; render each process instead, with its limitation explicit.
-		if goos == "windows" && p.CWD == "?" {
+		// A process whose working directory can't be read (Windows helper
+		// processes; a denied /proc read locally) can't be matched to a
+		// thread. Render it plainly rather than attaching the same newest
+		// SQLite thread to every such process.
+		if p.CWD == "?" {
 			s.Title = "unmatched Codex process"
 			break
 		}

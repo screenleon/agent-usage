@@ -90,8 +90,15 @@ func TestGrokConfigured(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if grokConfigured(home) {
+		t.Fatal("auth.json without a key should not configure Grok")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"),
+		[]byte(`{"https://auth.x.ai::x":{"key":"g-tok"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if !grokConfigured(home) {
-		t.Fatal("auth.json should configure Grok")
+		t.Fatal("auth.json with a key should configure Grok")
 	}
 }
 

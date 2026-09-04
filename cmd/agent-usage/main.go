@@ -110,8 +110,7 @@ func runWatch(w io.Writer, printOnce func() int, interval time.Duration, failUnd
 		} else {
 			fmt.Fprintln(w)
 		}
-		code := printOnce()
-		return code
+		return printOnce()
 	}
 	if code := refresh(); failUnder != nil && code != 0 {
 		return code

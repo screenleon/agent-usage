@@ -100,11 +100,10 @@ func Load(opt Options) Report {
 		rep.Claude = readClaude(opt.Home)
 	}
 	wantsGrok := filter.Wants(opt.Agents, "grok")
-	explicitGrok := wantsGrok && len(opt.Agents) > 0
 	// In the default (no --agent filter) view, skip an unconfigured Grok
 	// silently instead of showing a "no token" error nobody asked to see.
 	// An explicit `--agent grok` still surfaces the real error.
-	needGrok := wantsGrok && (explicitGrok || grokConfigured(opt.Home))
+	needGrok := wantsGrok && (len(opt.Agents) > 0 || grokConfigured(opt.Home))
 	needCodex := filter.Wants(opt.Agents, "codex")
 	if !needGrok && !needCodex {
 		return rep
@@ -157,8 +156,7 @@ func Load(opt Options) Report {
 }
 
 func grokConfigured(home string) bool {
-	st, err := os.Stat(filepath.Join(home, ".grok", "auth.json"))
-	return err == nil && !st.IsDir()
+	return grokToken(home) != ""
 }
 
 func readClaude(home string) Claude {

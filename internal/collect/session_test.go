@@ -584,7 +584,7 @@ func TestLeftoverSessionUnknownWindowsCodex(t *testing.T) {
 	writeCodexFixture(t, home, threadsSchema+
 		"INSERT INTO threads VALUES ('t1','/tmp/latest','latest',129200,0,2000000000,'gpt-5.6-terra');\n")
 	p := Proc{PID: 42, Agent: "codex", CWD: "?", Cmd: "codex", Raw: "codex"}
-	s := leftoverSessionForOS(p, home, map[string]int64{"gpt-5.6-terra": 258400}, "windows")
+	s := leftoverSession(p, home, map[string]int64{"gpt-5.6-terra": 258400})
 	if s.Title != "unmatched Codex process" || s.Tokens != nil || s.Model != "" || s.Ctx != "" {
 		t.Fatalf("got %#v", s)
 	}
