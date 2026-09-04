@@ -246,6 +246,25 @@ func TestLoadSelectsProvidersAndPreservesCache(t *testing.T) {
 	}
 }
 
+func TestLoadUnconfiguredGrokDefaultVsExplicit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected HTTP call to %s", r.URL)
+		return nil, nil
+	})}
+
+	r := Load(Options{Home: home, Client: client, TTL: time.Minute})
+	if r.Grok.OK || r.Grok.Error != "" {
+		t.Fatalf("default view should silently skip unconfigured grok: %#v", r.Grok)
+	}
+
+	r = Load(Options{Home: home, Client: client, Agents: []string{"grok"}, TTL: time.Minute})
+	if r.Grok.OK || r.Grok.Error == "" {
+		t.Fatalf("explicit --agent grok should still report the missing-token error: %#v", r.Grok)
+	}
+}
+
 func TestLoadConcurrent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache-conc"))

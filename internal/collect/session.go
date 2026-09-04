@@ -574,12 +574,6 @@ func enrichCodex(s *Session, home, cwd, cmd string, windows map[string]int64) {
 	if cwd != "" && cwd != "?" {
 		rows = querySQLiteMaps(db,
 			`SELECT tokens_used, title, IFNULL(model,'') AS model FROM threads WHERE archived=0 AND cwd=? ORDER BY updated_at DESC LIMIT 1`, cwd)
-	} else if runtime.GOOS == "windows" {
-		// Windows does not make another process's current directory available.
-		// Fall back to the latest active thread so a normal Codex invocation
-		// still shows its local context use; --recent lists all active threads.
-		rows = querySQLiteMaps(db,
-			`SELECT tokens_used, title, IFNULL(model,'') AS model FROM threads WHERE archived=0 ORDER BY updated_at DESC LIMIT 1`)
 	}
 	model := firstFlagValue(cmd, "-m", "--model")
 	if len(rows) > 0 {
@@ -592,9 +586,6 @@ func enrichCodex(s *Session, home, cwd, cmd string, windows map[string]int64) {
 		}
 		if t := tidyTitle(row["title"]); t != "" {
 			s.Title = t
-			if cwd == "" || cwd == "?" {
-				s.Title = "latest local thread: " + t
-			}
 		}
 	}
 	if model != "" {
